@@ -1,14 +1,17 @@
 from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QStackedWidget
 
 from app.ui.sidebar import Sidebar
-from app.ui.pages.dashboard_page import DashboardPage
+from app.ui.pages.candidate_dashboard import CandidateDashboard
+from app.ui.pages.interviewer_dashboard import InterviewerDashboard
 from app.ui.pages.interview_page import InterviewPage
 from app.ui.pages.placeholder_page import PlaceholderPage
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    # Added user_role parameter to determine which dashboard to load
+    def __init__(self, user_role="candidate"):
         super().__init__()
+        self.user_role = user_role
         self.setWindowTitle("InterviewIQ — AI Interview Assessment System")
         self.resize(1280, 800)
 
@@ -22,8 +25,15 @@ class MainWindow(QMainWindow):
 
         self.stack = QStackedWidget()
 
+        # Conditionally load the appropriate dashboard widget
+        if self.user_role == "interviewer":
+            dashboard_page = InterviewerDashboard()
+        else:
+            dashboard_page = CandidateDashboard()
+            dashboard_page.start_interview_requested.connect(lambda: self._navigate("interview"))
+
         self.pages = {
-            "dashboard": DashboardPage(),
+            "dashboard": dashboard_page,
             "interview": InterviewPage(),
             "reports": PlaceholderPage(
                 "Candidate Reports",
@@ -47,12 +57,10 @@ class MainWindow(QMainWindow):
                 "Integrity Log",
                 "Suspected AI-assisted answers during live interviews",
                 "This section will log:\n\n"
-                "  • External device connections during an active interview\n"
                 "  • Gaze-tracking anomalies (reading off-screen)\n"
                 "  • Response latency anomalies\n"
                 "  • Linguistic markers consistent with AI-generated answers\n\n"
-                "External device monitoring is active from the New Interview screen; "
-                "the full integrity log page will be built next.",
+                "Not yet implemented — this is the core novel research contribution.",
             ),
             "settings": PlaceholderPage(
                 "Settings",
