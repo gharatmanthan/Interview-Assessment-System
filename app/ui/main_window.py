@@ -47,10 +47,12 @@ class MainWindow(QMainWindow):
                 "Integrity Log",
                 "Suspected AI-assisted answers during live interviews",
                 "This section will log:\n\n"
+                "  • External device connections during an active interview\n"
                 "  • Gaze-tracking anomalies (reading off-screen)\n"
                 "  • Response latency anomalies\n"
                 "  • Linguistic markers consistent with AI-generated answers\n\n"
-                "Not yet implemented — this is the core novel research contribution.",
+                "External device monitoring is active from the New Interview screen; "
+                "the full integrity log page will be built next.",
             ),
             "settings": PlaceholderPage(
                 "Settings",

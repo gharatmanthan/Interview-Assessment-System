@@ -8,6 +8,7 @@ combined with **integrity / AI-assisted-answer detection** for automated intervi
 What works right now:
 - Full desktop app shell (sidebar navigation, 6 sections)
 - Live webcam preview on the "New Interview" screen (via OpenCV)
+- External device monitoring during interviews, saved as integrity flags
 - Question flow (next/previous navigation through question bank)
 - Placeholder transcript box (ready to wire up to Whisper)
 - Dashboard with stat cards (currently static — wire to real data next)
@@ -56,8 +57,8 @@ If no webcam is available it will show an error message but the rest of the app 
 2. **Transcription & NLP Scoring** — Whisper for speech-to-text, answer relevance scoring — not started
 3. **Explainability Layer** — SHAP/LIME overlays explaining each score — not started
 4. **Bias Audit Module** — fairness metrics across proxy groups — not started
-5. **Integrity Detection Module** — gaze tracking, response-latency anomalies, AI-text fingerprinting
-   — not started (this is the core novel research contribution)
+5. **Integrity Detection Module** — external device monitoring is wired; gaze tracking,
+   response-latency anomalies, and AI-text fingerprinting are planned next
 6. **Reporting Dashboard** — candidate + evaluator views — static shell only
 
 ## Next steps

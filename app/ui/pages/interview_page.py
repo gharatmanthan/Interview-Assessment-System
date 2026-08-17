@@ -5,8 +5,12 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
 
 import cv2
+from uuid import uuid4
 
 from app.core.question_bank import DEFAULT_QUESTIONS
+from app.core.db import save_integrity_flag, save_session
+from app.core.models import InterviewSession
+from app.candidate.integrity import ExternalDeviceMonitor
 
 
 class InterviewPage(QWidget):
@@ -15,10 +19,16 @@ class InterviewPage(QWidget):
         self.capture = None
         self.timer = QTimer()
         self.timer.timeout.connect(self._update_frame)
+        self.integrity_timer = QTimer()
+        self.integrity_timer.timeout.connect(self._poll_integrity)
 
         self.questions = DEFAULT_QUESTIONS
         self.current_index = 0
         self.is_recording = False
+        self.session_id = f"session-{uuid4().hex[:8]}"
+        self.session_saved = False
+        self.integrity_flag_count = 0
+        self.device_monitor = ExternalDeviceMonitor(self.session_id)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(36, 30, 36, 30)
@@ -60,6 +70,12 @@ class InterviewPage(QWidget):
         cam_btn_row.addStretch()
         cam_btn_row.addWidget(self.integrity_badge)
         cam_layout.addLayout(cam_btn_row)
+
+        self.integrity_log = QTextEdit()
+        self.integrity_log.setReadOnly(True)
+        self.integrity_log.setMaximumHeight(96)
+        self.integrity_log.setPlaceholderText("External device alerts will appear here during the interview.")
+        cam_layout.addWidget(self.integrity_log)
 
         body.addWidget(cam_card, stretch=3)
 
@@ -123,6 +139,7 @@ class InterviewPage(QWidget):
             self.start_cam_btn.setText("Start Camera")
             self.integrity_badge.setText("Integrity: Not Monitoring")
             self.integrity_badge.setObjectName("Badge-clear")
+            self._stop_integrity_monitoring()
         else:
             self.capture = cv2.VideoCapture(0)
             if not self.capture.isOpened():
@@ -130,6 +147,7 @@ class InterviewPage(QWidget):
                 return
             self.timer.start(30)
             self.start_cam_btn.setText("Stop Camera")
+            self._start_integrity_monitoring()
             self.integrity_badge.setText("Integrity: Monitoring")
             self.integrity_badge.setObjectName("Badge-flagged")
 
@@ -163,8 +181,41 @@ class InterviewPage(QWidget):
         self.question_text.setText(self.questions[self.current_index])
         self.progress_label.setText(f"Question {self.current_index + 1} of {len(self.questions)}")
 
+    def _start_integrity_monitoring(self):
+        if not self.session_saved:
+            save_session(
+                InterviewSession(
+                    session_id=self.session_id,
+                    candidate_name="Local Candidate",
+                    job_title="Interview Session",
+                )
+            )
+            self.session_saved = True
+
+        self.device_monitor.start()
+        self.integrity_timer.start(5000)
+        if self.device_monitor.is_supported:
+            self._append_integrity_log("Device monitor started. Current devices captured as baseline.")
+        else:
+            self._append_integrity_log("Device monitor is only available on Windows in this build.")
+
+    def _stop_integrity_monitoring(self):
+        if self.integrity_timer.isActive():
+            self.integrity_timer.stop()
+
+    def _poll_integrity(self):
+        for flag in self.device_monitor.poll():
+            save_integrity_flag(flag)
+            self.integrity_flag_count += 1
+            self.integrity_badge.setText(f"Integrity: {self.integrity_flag_count} Flag(s)")
+            self._append_integrity_log(flag.detail)
+
+    def _append_integrity_log(self, message):
+        self.integrity_log.append(message)
+
     def cleanup(self):
         if self.timer.isActive():
             self.timer.stop()
+        self._stop_integrity_monitoring()
         if self.capture:
             self.capture.release()

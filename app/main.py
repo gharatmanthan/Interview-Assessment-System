@@ -8,9 +8,12 @@ from PySide6.QtGui import QFont
 
 from app.ui.main_window import MainWindow
 from app.utils.theme import STYLESHEET
+from app.core.db import init_db
 
 
 def main():
+    init_db()
+
     app = QApplication(sys.argv)
     app.setApplicationName("Interview Assessment System")
     app.setStyleSheet(STYLESHEET)
