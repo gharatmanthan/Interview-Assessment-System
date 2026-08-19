@@ -64,6 +64,55 @@ class FairnessFlag:
 
 
 @dataclass
+class RecruiterUser:
+    """A recruiter account. Simple auth — gates the app before MainWindow shows.
+    Owner: Member C
+    """
+    username: str
+    password_hash: str
+    full_name: str = ""
+    created_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass
+class Candidate:
+    """An invited candidate for a specific job posting — exists from the
+    moment a recruiter invites them, before any InterviewSession starts.
+    This is what makes the dashboard's candidate list complete: invited-but-
+    not-started candidates show up here, not just completed sessions.
+    Owner: Member C
+    """
+    candidate_id: str
+    job_id: str
+    name: str
+    email: str
+    invite_code: str               # unique code/link the candidate uses to start
+    status: str = "invited"         # "invited" | "in_progress" | "completed" | "expired"
+    session_id: Optional[str] = None  # linked once they actually start the interview
+    invited_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass
+class JobPosting:
+    """A recruiter-created job posting — drives RAG-grounded question
+    selection and scoring for every candidate interviewed against it.
+    Owner: Member C (creation UI) — read by Member B's rag.py + question_selector.py
+    """
+    job_id: str
+    title: str
+    description: str
+    required_skills: list          # e.g. ["Python", "SQL", "System Design"]
+    experience_level: str          # "Fresher" | "Junior" | "Mid" | "Senior"
+    department: str
+    num_rounds: int = 1
+    time_limit_seconds: int = 120
+    adaptive_difficulty: bool = True
+    # competency category -> weight (0-100), should sum to 100
+    competency_weights: dict = field(default_factory=dict)
+    created_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass
 class InterviewSession:
     """The top-level record tying one interview together.
     Created by: app/candidate/capture.py (Member A) when a session starts
@@ -73,6 +122,7 @@ class InterviewSession:
     session_id: str
     candidate_name: str
     job_title: str
+    job_id: Optional[str] = None   # links back to JobPosting.job_id
     video_path: Optional[str] = None
     audio_path: Optional[str] = None
     transcript: Optional[str] = None

@@ -4,6 +4,8 @@ from PySide6.QtCore import Signal, Qt
 
 NAV_ITEMS = [
     ("dashboard", "🏠  Dashboard"),
+    ("job_posting", "📝  Create Job Posting"),
+    ("candidates", "👥  Candidates"),
     ("interview", "🎙  New Interview"),
     ("reports", "📊  Candidate Reports"),
     ("bias_audit", "⚖️  Bias Audit"),
@@ -14,8 +16,9 @@ NAV_ITEMS = [
 
 class Sidebar(QWidget):
     navigate = Signal(str)
+    logout = Signal()
 
-    def __init__(self):
+    def __init__(self, logged_in_as: str = None):
         super().__init__()
         self.setObjectName("Sidebar")
         self.setFixedWidth(230)
@@ -44,6 +47,18 @@ class Sidebar(QWidget):
             self.buttons[key] = btn
 
         layout.addSpacerItem(QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding))
+
+        if logged_in_as:
+            user_lbl = QLabel(f"Logged in as {logged_in_as}")
+            user_lbl.setObjectName("BrandSubtitle")
+            user_lbl.setWordWrap(True)
+            layout.addWidget(user_lbl)
+
+        logout_btn = QPushButton("🚪  Log Out")
+        logout_btn.setObjectName("NavButton")
+        logout_btn.setCursor(Qt.PointingHandCursor)
+        logout_btn.clicked.connect(self.logout.emit)
+        layout.addWidget(logout_btn)
 
         footer = QLabel("Group Project · v0.1")
         footer.setObjectName("BrandSubtitle")

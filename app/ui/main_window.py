@@ -1,15 +1,29 @@
 from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QStackedWidget
+from PySide6.QtCore import Signal
 
 from app.ui.sidebar import Sidebar
 from app.ui.pages.dashboard_page import DashboardPage
 from app.ui.pages.interview_page import InterviewPage
+from app.ui.pages.job_posting_page import JobPostingPage
+from app.ui.pages.candidates_page import CandidatesPage
+from app.ui.pages.reports_page import ReportsPage
+from app.ui.pages.bias_audit_page import BiasAuditPage
+from app.ui.pages.integrity_log_page import IntegrityLogPage
+from app.ui.pages.settings_page import SettingsPage
 from app.ui.pages.placeholder_page import PlaceholderPage
+from app.core import db
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    logout_requested = Signal()
+
+    def __init__(self, logged_in_as: str = None):
         super().__init__()
-        self.setWindowTitle("InterviewIQ — AI Interview Assessment System")
+        self.logged_in_as = logged_in_as
+        title = "InterviewIQ — AI Interview Assessment System"
+        if logged_in_as:
+            title += f"  ({logged_in_as})"
+        self.setWindowTitle(title)
         self.resize(1280, 800)
 
         central = QWidget()
@@ -17,49 +31,21 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.sidebar = Sidebar()
+        self.sidebar = Sidebar(logged_in_as=logged_in_as)
         self.sidebar.navigate.connect(self._navigate)
+        self.sidebar.logout.connect(self.logout_requested.emit)
 
         self.stack = QStackedWidget()
 
         self.pages = {
             "dashboard": DashboardPage(),
+            "job_posting": JobPostingPage(),
+            "candidates": CandidatesPage(),
             "interview": InterviewPage(),
-            "reports": PlaceholderPage(
-                "Candidate Reports",
-                "Score breakdowns with explainability overlays",
-                "This section will list completed interviews with:\n\n"
-                "  • Overall score and sub-scores (content, delivery, confidence)\n"
-                "  • SHAP/LIME-based explanation of what drove each score\n"
-                "  • Per-question transcript and timing breakdown\n\n"
-                "Not yet implemented — will be built once the scoring pipeline is in place.",
-            ),
-            "bias_audit": PlaceholderPage(
-                "Bias Audit",
-                "Fairness metrics across candidate groups",
-                "This section will surface:\n\n"
-                "  • Score distributions across demographic proxies\n"
-                "  • Statistical parity / disparate impact indicators\n"
-                "  • Flags when scoring patterns diverge significantly across groups\n\n"
-                "Not yet implemented — depends on collected interview data.",
-            ),
-            "integrity": PlaceholderPage(
-                "Integrity Log",
-                "Suspected AI-assisted answers during live interviews",
-                "This section will log:\n\n"
-                "  • External device connections during an active interview\n"
-                "  • Gaze-tracking anomalies (reading off-screen)\n"
-                "  • Response latency anomalies\n"
-                "  • Linguistic markers consistent with AI-generated answers\n\n"
-                "External device monitoring is active from the New Interview screen; "
-                "the full integrity log page will be built next.",
-            ),
-            "settings": PlaceholderPage(
-                "Settings",
-                "Application configuration",
-                "Camera/mic device selection, scoring model configuration, "
-                "and export settings will live here.",
-            ),
+            "reports": ReportsPage(),
+            "bias_audit": BiasAuditPage(),
+            "integrity": IntegrityLogPage(),
+            "settings": SettingsPage(),
         }
 
         for page in self.pages.values():
@@ -75,6 +61,8 @@ class MainWindow(QMainWindow):
     def _navigate(self, key):
         page = self.pages.get(key)
         if page:
+            if hasattr(page, "refresh"):
+                page.refresh()
             self.stack.setCurrentWidget(page)
 
     def closeEvent(self, event):
