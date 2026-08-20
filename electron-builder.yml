@@ -1,0 +1,25 @@
+appId: com.interviewiq.desktop
+productName: InterviewIQ
+directories:
+  output: release
+files:
+  - dist/**/*
+  - ../frontend/out/**/*
+extraResources:
+  - from: ../api
+    to: api
+  - from: ../app
+    to: app
+  - from: ../requirements.txt
+    to: requirements.txt
+  - from: ../data
+    to: data
+  - from: ../api/__init__.py
+    to: api/__init__.py
+  - from: ../api/routes
+    to: api/routes
+win:
+  target: nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
