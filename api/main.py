@@ -43,7 +43,7 @@ app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
 app.include_router(integrity.router, prefix="/api", tags=["integrity"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(devices.router, prefix="/api/devices", tags=["devices"])
-app.include_router(candidate_flow.router, tags=["candidate-flow"])
+app.include_router(candidate_flow.router, prefix="/api", tags=["candidate-flow"])
 
 
 @app.get("/health")
