@@ -58,11 +58,53 @@ def port_scan(timeout=0.3) -> list:
     return found
 
 
-def process_scan() -> list:
-    """TODO: use psutil to check for teamviewer.exe, anydesk.exe, vncserver, etc.
-    (add psutil to requirements.txt when you start this)
-    """
-    raise NotImplementedError
+SUSPICIOUS_PROCESSES = {
+    # Remote desktop
+    "teamviewer.exe": "TeamViewer remote desktop detected",
+    "anydesk.exe": "AnyDesk remote desktop detected",
+    "ammyy.exe": "Ammyy Admin remote desktop detected",
+    "splashtop.exe": "Splashtop remote desktop detected",
+    "chrome_remote_desktop.exe": "Chrome Remote Desktop detected",
+    "parseconect": "Parallels Access detected",
+    # Virtual machines
+    "vmware.exe": "VMware virtual machine detected",
+    "vmware-vmx.exe": "VMware VM process detected",
+    "virtualbox.exe": "VirtualBox detected",
+    "vboxsvc.exe": "VirtualBox service detected",
+    "qemu.exe": "QEMU virtual machine detected",
+    # Screen sharing
+    "vnc.exe": "VNC screen sharing detected",
+    "tightvnc.exe": "TightVNC detected",
+    "realvnc.exe": "RealVNC detected",
+    # Scripting/automation
+    "autohotkey.exe": "AutoHotkey automation detected",
+    "pyautogui": "PyAutoGUI automation detected",
+}
+
+
+def process_scan() -> list[dict]:
+    """Scan running processes for suspicious software."""
+    findings = []
+    try:
+        import psutil
+        for proc in psutil.process_iter(["pid", "name"]):
+            try:
+                name = proc.info["name"].lower()
+                for pattern, detail in SUSPICIOUS_PROCESSES.items():
+                    if pattern in name:
+                        findings.append({
+                            "flag_type": "suspicious_process",
+                            "detail": detail,
+                            "severity": "high",
+                            "pid": proc.info["pid"],
+                            "process_name": proc.info["name"],
+                        })
+                        break
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except ImportError:
+        pass
+    return findings
 
 
 def _run_powershell_device_query(timeout=4) -> list:
@@ -256,5 +298,14 @@ def run_checks(session_id: str) -> list:
                 severity="high",
             )
         )
-    # TODO: append process_scan() results and CV-based flags here too
+    for finding in process_scan():
+        flags.append(
+            IntegrityFlag(
+                session_id=session_id,
+                flag_type=finding["flag_type"],
+                detail=finding["detail"],
+                severity=finding["severity"],
+            )
+        )
+    # TODO: append CV-based flags here too
     return flags
