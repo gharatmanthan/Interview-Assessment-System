@@ -48,7 +48,7 @@ function medalBadge(rank: number) {
   return null
 }
 
-const BASE_URL = "http://localhost:8000"
+const BASE_URL = `http://localhost:${(window as any).__API_PORT__ || 8000}`
 
 export default function ReportsPage() {
   const [sessions, setSessions] = useState<InterviewSession[]>([])
