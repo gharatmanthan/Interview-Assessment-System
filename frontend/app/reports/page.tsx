@@ -19,6 +19,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { FileText } from "lucide-react"
+import { EmptyState } from "@/components/empty-state"
 
 function scoreColor(score: number): string {
   if (score >= 75) return "text-emerald-600"
@@ -129,7 +131,11 @@ export default function ReportsPage() {
                   {loadingSessions ? (
                     <div className="space-y-3 py-4 text-center text-sm text-slate-400">Loading...</div>
                   ) : sessions.length === 0 ? (
-                    <div className="py-8 text-center text-sm text-slate-400">No sessions yet</div>
+                    <EmptyState
+                      icon={FileText}
+                      title="No reports yet"
+                      description="Reports will appear here once candidates complete their interviews."
+                    />
                   ) : (
                     <div className="max-h-[600px] space-y-2 overflow-y-auto pr-1">
                       {sessions.map((s) => (

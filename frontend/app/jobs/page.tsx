@@ -34,8 +34,9 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog"
-import { Pencil, Trash2, Plus } from "lucide-react"
+import { Pencil, Trash2, Plus, Briefcase } from "lucide-react"
 import { SkillTagInput } from "@/components/skill-tag-input"
+import { EmptyState } from "@/components/empty-state"
 
 const COMPETENCY_KEYS = [
   "dsa",
@@ -388,29 +389,27 @@ export default function JobsPage() {
           </Button>
         </CardHeader>
         <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Title</TableHead>
-                <TableHead>Department</TableHead>
-                <TableHead>Experience Level</TableHead>
-                <TableHead>Skills</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {jobs.length === 0 ? (
+          {jobs.length === 0 ? (
+            <EmptyState
+              icon={Briefcase}
+              title="No job postings"
+              description="Create your first job posting to start inviting candidates."
+              action={{ label: "Create Job Posting", onClick: openCreate }}
+            />
+          ) : (
+            <Table>
+              <TableHeader>
                 <TableRow>
-                  <TableCell
-                    colSpan={6}
-                    className="text-center text-slate-400 py-8"
-                  >
-                    No job postings yet. Click &quot;Add Job Posting&quot; to create one.
-                  </TableCell>
+                  <TableHead>Title</TableHead>
+                  <TableHead>Department</TableHead>
+                  <TableHead>Experience Level</TableHead>
+                  <TableHead>Skills</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
-              ) : (
-                jobs.map((job) => (
+              </TableHeader>
+              <TableBody>
+                {jobs.map((job) => (
                   <TableRow key={job.job_id}>
                     <TableCell className="font-medium">{job.title}</TableCell>
                     <TableCell>{job.department}</TableCell>
@@ -455,10 +454,10 @@ export default function JobsPage() {
                       </div>
                     </TableCell>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+                ))}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
 

@@ -15,6 +15,7 @@ import {
   Users,
   Briefcase,
 } from "lucide-react"
+import { EmptyState } from "@/components/empty-state"
 
 export default function DashboardPage() {
   const router = useRouter()
@@ -46,6 +47,24 @@ export default function DashboardPage() {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <p className="text-slate-400 text-sm">Loading dashboard...</p>
+      </div>
+    )
+  }
+
+  const total = stats
+    ? (stats.interviews_conducted ?? 0) +
+      Object.values(stats.candidates_by_status).reduce((a, b) => a + b, 0)
+    : 0
+
+  if (total === 0 && !loading) {
+    return (
+      <div className="mt-12">
+        <EmptyState
+          icon={Briefcase}
+          title="Welcome to InterviewIQ"
+          description="Get started by creating your first job posting."
+          action={{ label: "Create Job Posting", onClick: () => router.push("/jobs") }}
+        />
       </div>
     )
   }

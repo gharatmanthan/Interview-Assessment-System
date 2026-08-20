@@ -18,7 +18,8 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import { Copy, RefreshCw, Upload, Trash2, Loader2 } from "lucide-react"
+import { Copy, RefreshCw, Upload, Trash2, Loader2, Users } from "lucide-react"
+import { EmptyState } from "@/components/empty-state"
 
 const statusConfig: Record<string, { label: string; className: string }> = {
   invited: { label: "Invited", className: "bg-blue-100 text-blue-700 border-blue-200" },
@@ -164,9 +165,11 @@ export default function CandidatesPage() {
                 <Button variant="outline" className="mt-4" onClick={fetchData}>Retry</Button>
               </div>
             ) : candidates.length === 0 ? (
-              <div className="p-12 text-center">
-                <p className="text-sm text-slate-500">No candidates yet. Invite one to get started.</p>
-              </div>
+              <EmptyState
+                icon={Users}
+                title="No candidates"
+                description="Invite your first candidate to get started."
+              />
             ) : (
               <Table>
                 <TableHeader>
