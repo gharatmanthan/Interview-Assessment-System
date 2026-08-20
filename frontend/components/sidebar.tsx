@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   Settings,
   LogOut,
+  ExternalLink,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -76,6 +77,17 @@ export default function Sidebar({ showLogout = true }: SidebarProps) {
           )
         })}
       </nav>
+
+      <div className="my-2 border-t border-white/10" />
+      <a
+        href="/candidate/entry"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-400 transition-colors hover:text-white hover:bg-white/10"
+      >
+        <ExternalLink className="h-5 w-5 shrink-0" />
+        Take Interview
+      </a>
 
       {showLogout && (
         <div className="px-3 pb-5 space-y-3">
