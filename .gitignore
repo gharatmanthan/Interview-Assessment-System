@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+electron/node_modules/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Next.js
+frontend/.next/
+frontend/out/
+
+# Electron
+electron/dist/
+electron/release/
+
+# Data (user-specific)
+data/app.db
+data/settings.json
+data/resumes/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Build
+dist/
+release/
+*.egg-info/
