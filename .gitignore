@@ -19,9 +19,8 @@ electron/dist/
 electron/release/
 
 # Data (user-specific)
-data/app.db
-data/settings.json
-data/resumes/
+data/
+
 
 # IDE
 .vscode/
