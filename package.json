@@ -1,0 +1,16 @@
+{
+  "name": "interviewiq",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI-Powered Interview Assessment System",
+  "scripts": {
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:electron": "cd electron && npm run dev",
+    "build:frontend": "cd frontend && npm run build",
+    "build:electron": "cd electron && npm run build",
+    "install:all": "cd frontend && npm install && cd ../electron && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}

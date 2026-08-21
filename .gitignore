@@ -40,3 +40,5 @@ Thumbs.db
 dist/
 release/
 *.egg-info/
+*.tsbuildinfo
+frontend/next-env.d.ts
