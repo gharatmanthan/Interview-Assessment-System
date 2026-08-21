@@ -126,6 +126,7 @@ class RegisterForm(QWidget):
 
 class LoginWindow(QWidget):
     authenticated = Signal(str)  # emits username on success
+    closed = Signal()            # emitted when the user closes the window
 
     def __init__(self):
         super().__init__()
@@ -157,3 +158,7 @@ class LoginWindow(QWidget):
 
     def _on_success(self, username):
         self.authenticated.emit(username)
+
+    def closeEvent(self, event):
+        self.closed.emit()
+        event.accept()

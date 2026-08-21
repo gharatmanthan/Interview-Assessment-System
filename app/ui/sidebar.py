@@ -1,3 +1,5 @@
+import os
+
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel, QSpacerItem, QSizePolicy
 from PySide6.QtCore import Signal, Qt
 
@@ -7,11 +9,23 @@ NAV_ITEMS = [
     ("job_posting", "📝  Create Job Posting"),
     ("candidates", "👥  Candidates"),
     ("interview", "🎙  New Interview"),
+    ("live_monitor", "📡  Live Monitor"),
     ("reports", "📊  Candidate Reports"),
     ("bias_audit", "⚖️  Bias Audit"),
     ("integrity", "🛡  Integrity Log"),
     ("settings", "⚙️  Settings"),
 ]
+
+
+def visible_nav_items():
+    """Candidates take interviews through their own window — recruiters
+    should never see the interview tab unless DEV_MODE=1 (Member A's
+    direct-UI testing shortcut)."""
+    dev_mode = os.environ.get("DEV_MODE") == "1"
+    return [
+        (key, label) for key, label in NAV_ITEMS
+        if key != "interview" or dev_mode
+    ]
 
 
 class Sidebar(QWidget):
@@ -38,7 +52,7 @@ class Sidebar(QWidget):
         layout.addWidget(subtitle)
         layout.addSpacing(24)
 
-        for key, label in NAV_ITEMS:
+        for key, label in visible_nav_items():
             btn = QPushButton(label)
             btn.setObjectName("NavButton")
             btn.setCursor(Qt.PointingHandCursor)

@@ -1,3 +1,5 @@
+import os
+
 from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QStackedWidget
 from PySide6.QtCore import Signal
 
@@ -9,6 +11,7 @@ from app.ui.pages.candidates_page import CandidatesPage
 from app.ui.pages.reports_page import ReportsPage
 from app.ui.pages.bias_audit_page import BiasAuditPage
 from app.ui.pages.integrity_log_page import IntegrityLogPage
+from app.ui.pages.live_monitor_page import LiveMonitorPage
 from app.ui.pages.settings_page import SettingsPage
 from app.ui.pages.placeholder_page import PlaceholderPage
 from app.core import db
@@ -41,12 +44,15 @@ class MainWindow(QMainWindow):
             "dashboard": DashboardPage(),
             "job_posting": JobPostingPage(),
             "candidates": CandidatesPage(),
-            "interview": InterviewPage(),
+            "live_monitor": LiveMonitorPage(),
             "reports": ReportsPage(),
             "bias_audit": BiasAuditPage(),
             "integrity": IntegrityLogPage(),
             "settings": SettingsPage(),
         }
+
+        if os.environ.get("DEV_MODE") == "1":
+            self.pages["interview"] = InterviewPage()
 
         for page in self.pages.values():
             self.stack.addWidget(page)
@@ -66,7 +72,7 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentWidget(page)
 
     def closeEvent(self, event):
-        interview_page = self.pages.get("interview")
-        if hasattr(interview_page, "cleanup"):
-            interview_page.cleanup()
+        for page in self.pages.values():
+            if hasattr(page, "cleanup"):
+                page.cleanup()
         event.accept()

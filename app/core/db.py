@@ -10,6 +10,8 @@ of you to read at a glance.
 """
 import sqlite3
 import json
+import hashlib
+import secrets
 from pathlib import Path
 from dataclasses import asdict
 
@@ -103,10 +105,51 @@ def init_db():
         score_delta REAL,
         note TEXT
     );
+    CREATE TABLE IF NOT EXISTS candidate_accounts (
+        candidate_id TEXT PRIMARY KEY,
+        password_hash TEXT NOT NULL,
+        full_name TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS live_interviews (
+        session_id TEXT PRIMARY KEY,
+        candidate_id TEXT NOT NULL,
+        candidate_name TEXT NOT NULL,
+        question TEXT NOT NULL,
+        question_index INTEGER NOT NULL DEFAULT 0,
+        transcript TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'live',
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
     """)
+    conn.execute(
+        """INSERT OR IGNORE INTO candidate_accounts
+        (candidate_id, password_hash, full_name)
+        VALUES (?, ?, ?)""",
+        ("candidate01", f"interviewiq${_hash_password('interview123', 'interviewiq')}", "Demo Candidate"),
+    )
     conn.commit()
     conn.close()
     _migrate_candidates_resume_columns()
+    _migrate_job_postings_active_column()
+
+
+def _hash_password(password: str, salt: str) -> str:
+    """Same salted SHA-256 scheme as app/core/auth.py (kept local to avoid a
+    circular import — auth.py imports this module)."""
+    return hashlib.sha256((salt + password).encode()).hexdigest()
+
+
+def _migrate_job_postings_active_column():
+    """Adds the is_active flag to an existing job_postings table from before
+    the candidate-facing active-postings view existed. Covers upgrades from
+    an older DB file, same as _migrate_candidates_resume_columns().
+    """
+    conn = get_connection()
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(job_postings)").fetchall()}
+    if "is_active" not in existing:
+        conn.execute("ALTER TABLE job_postings ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+    conn.commit()
+    conn.close()
 
 
 def _migrate_candidates_resume_columns():
@@ -152,6 +195,41 @@ def get_recruiter_user(username):
     ).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def save_candidate_account(candidate_id, password, full_name):
+    """Create or update a candidate sign-in account. The invite-code flow
+    stays the primary credential; this backs the optional candidate login.
+    """
+    salt = secrets.token_hex(8)
+    stored_hash = f"{salt}${_hash_password(password, salt)}"
+    conn = get_connection()
+    conn.execute(
+        """INSERT OR REPLACE INTO candidate_accounts (candidate_id, password_hash, full_name)
+        VALUES (?, ?, ?)""",
+        (candidate_id, stored_hash, full_name),
+    )
+    conn.commit()
+    conn.close()
+
+
+def authenticate_candidate(candidate_id, password):
+    """Returns dict(candidate_id, full_name) on success, else None."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT candidate_id, password_hash, full_name FROM candidate_accounts WHERE candidate_id = ?",
+        (candidate_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    try:
+        salt, hashed = row["password_hash"].split("$", 1)
+    except ValueError:
+        return None
+    if _hash_password(password, salt) != hashed:
+        return None
+    return {"candidate_id": row["candidate_id"], "full_name": row["full_name"]}
 
 
 def _decode_candidate_row(d: dict) -> dict:
@@ -306,6 +384,70 @@ def save_session(session):
     conn.close()
 
 
+def update_session(session_id, **fields):
+    """Partial update of an existing session row (e.g. transcript as it streams)."""
+    allowed = {"transcript", "status", "completed_at", "video_path", "audio_path"}
+    changes = {key: value for key, value in fields.items() if key in allowed}
+    if not changes:
+        return
+    assignments = ", ".join(f"{key} = ?" for key in changes)
+    values = list(changes.values()) + [session_id]
+    conn = get_connection()
+    conn.execute(f"UPDATE sessions SET {assignments} WHERE session_id = ?", values)
+    conn.commit()
+    conn.close()
+
+
+def start_live_interview(session_id, candidate_id, candidate_name, question, question_index=0):
+    """Registers a running interview so the recruiter's Live Monitor can
+    watch it and push follow-up questions back to the candidate's screen.
+    """
+    conn = get_connection()
+    conn.execute(
+        """INSERT OR REPLACE INTO live_interviews
+        (session_id, candidate_id, candidate_name, question, question_index,
+         transcript, status, updated_at)
+        VALUES (?, ?, ?, ?, ?, '', 'live', CURRENT_TIMESTAMP)""",
+        (session_id, candidate_id, candidate_name, question, question_index),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_live_interview(session_id, **fields):
+    allowed = {"question", "question_index", "transcript", "status"}
+    changes = {key: value for key, value in fields.items() if key in allowed}
+    if not changes:
+        return
+    assignments = ", ".join(f"{key} = ?" for key in changes)
+    values = list(changes.values()) + [session_id]
+    conn = get_connection()
+    conn.execute(
+        f"UPDATE live_interviews SET {assignments}, updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
+        values,
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_live_interviews():
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM live_interviews WHERE status = 'live' ORDER BY updated_at DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_live_interview(session_id):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM live_interviews WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 def save_integrity_flag(flag):
     conn = get_connection()
     d = asdict(flag)
@@ -374,6 +516,33 @@ def get_all_job_postings():
         d["adaptive_difficulty"] = bool(d["adaptive_difficulty"])
         out.append(d)
     return out
+
+
+def get_active_job_postings():
+    """Active postings only — powers the candidate's pre-interview job view."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM job_postings WHERE is_active = 1 ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["required_skills"] = json.loads(d["required_skills"] or "[]")
+        d["competency_weights"] = json.loads(d["competency_weights"] or "{}")
+        d["adaptive_difficulty"] = bool(d["adaptive_difficulty"])
+        out.append(d)
+    return out
+
+
+def set_job_posting_active(job_id, is_active):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE job_postings SET is_active = ? WHERE job_id = ?",
+        (1 if is_active else 0, job_id),
+    )
+    conn.commit()
+    conn.close()
 
 
 def get_all_sessions():

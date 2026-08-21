@@ -3,7 +3,7 @@ Pydantic schemas matching app/core/models.py dataclasses.
 These are API request/response models only — the dataclasses remain source of truth.
 """
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Union
 from datetime import datetime
 
 
@@ -167,7 +167,9 @@ class IntegrityFlagResponse(BaseModel):
 
 class SettingsUpdate(BaseModel):
     camera_index: Optional[int] = None
-    mic_device: Optional[str] = None
+    # The desktop UI stores the mic as a device index (int); accept both so
+    # saving settings from the UI never breaks GET /api/settings validation.
+    mic_device: Optional[Union[str, int]] = None
     llm_provider: Optional[str] = None
     llm_api_key: Optional[str] = None
     export_dir: Optional[str] = None
@@ -175,7 +177,7 @@ class SettingsUpdate(BaseModel):
 
 class SettingsResponse(BaseModel):
     camera_index: int = 0
-    mic_device: str = "default"
+    mic_device: Union[str, int] = "default"
     llm_provider: str = "Groq"
     llm_api_key: str = ""
     export_dir: str = ""

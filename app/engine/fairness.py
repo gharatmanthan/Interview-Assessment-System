@@ -14,20 +14,20 @@ from app.core.models import FairnessFlag
 from app.engine import llm_client
 from app.engine.scoring import _heuristic_score
 
-PRONOUN_SWAPS = [
-    (r"\bhe\b", "she"), (r"\bshe\b", "he"),
-    (r"\bhis\b", "her"), (r"\bher\b", "his"),
-    (r"\bhim\b", "her"),
-]
+PRONOUN_SWAPS = {
+    "he": "she", "she": "he",
+    "his": "her", "her": "his",
+    "him": "her",
+}
+_PRONOUN_PATTERN = re.compile(r"\b(he|she|his|her|him)\b", re.IGNORECASE)
 
 FLAG_THRESHOLD = 5.0  # point shift considered worth flagging
 
 
 def _counterfactual_transcript(transcript: str) -> str:
-    result = transcript
-    for pattern, repl in PRONOUN_SWAPS:
-        result = re.sub(pattern, repl, result, flags=re.IGNORECASE)
-    return result
+    # Single pass so an already-swapped word can't be swapped back
+    # (sequential re.sub passes would undo each other: he->she then she->he).
+    return _PRONOUN_PATTERN.sub(lambda m: PRONOUN_SWAPS[m.group(0).lower()], transcript)
 
 
 def audit_bias(session_id: str, question_id: str, transcript: str,
