@@ -152,4 +152,11 @@ def complete_session(body: dict):
             if candidate:
                 db.update_candidate_status(candidate["candidate_id"], "completed")
 
+    # The real recording is (or will shortly be) in Reports — drop the stale
+    # live-preview frame so the monitor shows the feed as ended. A frame
+    # upload racing this moment just recreates the file harmlessly.
+    from api.routes.sessions import delete_live_frame
+
+    delete_live_frame(session_id)
+
     return {"success": True}

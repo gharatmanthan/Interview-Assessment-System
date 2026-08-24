@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Camera, CameraOff, Mic, CheckCircle, AlertTriangle, Loader2 } from "lucide-react"
+import { Camera, CameraOff, Mic, CheckCircle, AlertTriangle, Loader2, ShieldAlert } from "lucide-react"
+import { scanAndReport } from "@/lib/integrity"
+import type { IntegrityFlag } from "@/lib/types"
 
 export default function CandidateCheckPage() {
   const router = useRouter()
@@ -17,6 +19,8 @@ export default function CandidateCheckPage() {
   const [cameraOk, setCameraOk] = useState<boolean | null>(null)
   const [micOk, setMicOk] = useState<boolean | null>(null)
   const [micLevel, setMicLevel] = useState(0)
+  const [integrityFlags, setIntegrityFlags] = useState<IntegrityFlag[]>([])
+  const [integrityDone, setIntegrityDone] = useState(false)
   const streamRef = useRef<MediaStream | null>(null)
 
   useEffect(() => {
@@ -26,12 +30,34 @@ export default function CandidateCheckPage() {
       return
     }
     startDevices()
+    runLocalIntegrityCheck()
     return () => {
       streamRef.current?.getTracks().forEach((t) => t.stop())
       if (audioContextRef.current) audioContextRef.current.close()
       cancelAnimationFrame(animFrameRef.current)
     }
   }, [])
+
+  /**
+   * Runs port/process scans on THIS machine (via Electron's main process)
+   * and uploads any flags to the configured backend so they appear in the
+   * recruiter's Integrity Log. Works identically in local and remote mode.
+   */
+  async function runLocalIntegrityCheck() {
+    try {
+      const sessionId = sessionStorage.getItem("session_id")
+      if (!sessionId) {
+        setIntegrityDone(true)
+        return
+      }
+      const flags = await scanAndReport(sessionId)
+      setIntegrityFlags(flags)
+    } catch {
+      // Scan failure must never block the interview
+    } finally {
+      setIntegrityDone(true)
+    }
+  }
 
   async function startDevices() {
     try {
@@ -130,7 +156,7 @@ export default function CandidateCheckPage() {
               <Mic className="h-5 w-5 text-slate-600" />
               <span className="text-sm font-medium text-slate-900">Microphone</span>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               {micOk && (
                 <div className="w-24">
                   <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
@@ -155,14 +181,39 @@ export default function CandidateCheckPage() {
             </div>
           </div>
 
-          <div className="flex items-center justify-between rounded-lg border border-slate-100 p-3">
-            <div className="flex items-center gap-3">
-              <CheckCircle className="h-5 w-5 text-slate-600" />
-              <span className="text-sm font-medium text-slate-900">Integrity Check</span>
+          <div className="rounded-lg border border-slate-100 p-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <ShieldAlert className="h-5 w-5 text-slate-600" />
+                <div>
+                  <span className="text-sm font-medium text-slate-900">Environment Integrity</span>
+                  <p className="text-xs text-slate-400">
+                    Checked locally on your machine for remote-access tools
+                  </p>
+                </div>
+              </div>
+              {!integrityDone ? (
+                <Badge variant="outline"><Loader2 className="h-3 w-3 animate-spin mr-1" />Scanning</Badge>
+              ) : integrityFlags.length === 0 ? (
+                <Badge className="bg-green-100 text-green-700 border-green-200">
+                  <CheckCircle className="h-3 w-3 mr-1" />All clear
+                </Badge>
+              ) : (
+                <Badge className="bg-red-100 text-red-700 border-red-200">
+                  <AlertTriangle className="h-3 w-3 mr-1" />{integrityFlags.length} issue{integrityFlags.length > 1 ? "s" : ""} found
+                </Badge>
+              )}
             </div>
-            <Badge className="bg-green-100 text-green-700 border-green-200">
-              <CheckCircle className="h-3 w-3 mr-1" />All clear
-            </Badge>
+            {integrityFlags.length > 0 && (
+              <ul className="mt-2 space-y-1 border-t border-slate-100 pt-2">
+                {integrityFlags.map((flag, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-red-600">
+                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                    {flag.detail}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
 
@@ -172,7 +223,7 @@ export default function CandidateCheckPage() {
           disabled={!allPassed}
           onClick={handleStart}
         >
-          {allPassed ? "Start Interview" : "Please allow camera and microphone access"}
+          {allPassed ? (integrityFlags.length > 0 ? "Continue Anyway" : "Start Interview") : "Please allow camera and microphone access"}
         </Button>
       </CardContent>
     </Card>

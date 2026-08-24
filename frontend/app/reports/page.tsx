@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
-import { api } from "@/lib/api"
+import { api, getBaseUrl } from "@/lib/api"
 import { formatDate } from "@/lib/utils"
 import type { InterviewSession, CandidateReport, ComparisonRow, JobPosting } from "@/lib/types"
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select"
@@ -48,9 +48,10 @@ function medalBadge(rank: number) {
   return null
 }
 
-const BASE_URL = `http://localhost:${(window as any).__API_PORT__ || 8000}`
-
 export default function ReportsPage() {
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null)
+  const [csvUrl, setCsvUrl] = useState<string | null>(null)
+  const [recordingUrl, setRecordingUrl] = useState<string | null>(null)
   const [sessions, setSessions] = useState<InterviewSession[]>([])
   const [comparison, setComparison] = useState<ComparisonRow[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -71,10 +72,23 @@ export default function ReportsPage() {
   }, [])
 
   useEffect(() => {
-    if (!selectedId) { setReport(null); return }
+    if (!selectedId) { setReport(null); setRecordingUrl(null); return }
     setLoadingReport(true)
     api.getCandidateReport(selectedId).then(setReport).catch(() => setReport(null)).finally(() => setLoadingReport(false))
   }, [selectedId])
+
+  // Export links and recording playback all resolve against whichever backend
+  // this app is connected to (local sidecar or central server).
+  useEffect(() => {
+    if (!report) { setPdfUrl(null); setCsvUrl(null); setRecordingUrl(null); return }
+    const sid = report.session.session_id
+    getBaseUrl().then((base) => {
+      setPdfUrl(`${base}/api/reports/export/pdf/${sid}`)
+      setCsvUrl(`${base}/api/reports/export/csv`)
+      const vp = report.session.video_path
+      setRecordingUrl(vp ? `${base}/media/${vp.replace(/^\/+/, "")}` : null)
+    })
+  }, [report])
 
   function handleSort(field: string) {
     if (sortField === field) {
@@ -237,6 +251,21 @@ export default function ReportsPage() {
 
                       <Separator />
 
+                      {/* Interview Recording (uploaded from the candidate's machine) */}
+                      {recordingUrl && (
+                        <>
+                          <div>
+                            <h3 className="mb-3 text-lg font-semibold text-slate-900">Interview Recording</h3>
+                            <video
+                              controls
+                              className="w-full rounded-lg border border-slate-200 bg-black"
+                              src={recordingUrl}
+                            />
+                          </div>
+                          <Separator />
+                        </>
+                      )}
+
                       {/* Integrity Flags */}
                       <div>
                         <h3 className="mb-3 text-lg font-semibold text-slate-900">Integrity Flags</h3>
@@ -249,13 +278,13 @@ export default function ReportsPage() {
                       <div className="flex gap-3">
                         <Button
                           variant="outline"
-                          onClick={() => window.open(`${BASE_URL}/api/reports/export/pdf/${report.session.session_id}`, "_blank")}
+                          onClick={() => pdfUrl && window.open(pdfUrl, "_blank")}
                         >
                           Download PDF
                         </Button>
                         <Button
                           variant="outline"
-                          onClick={() => window.open(`${BASE_URL}/api/reports/export/csv`, "_blank")}
+                          onClick={() => csvUrl && window.open(csvUrl, "_blank")}
                         >
                           Export CSV
                         </Button>

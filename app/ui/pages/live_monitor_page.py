@@ -140,10 +140,22 @@ class LiveMonitorPage(QWidget):
         self.candidate_label.setText(f"Candidate: {session['candidate_name']}")
         self.question_label.setText(session["question"])
         self.transcript_box.setPlainText(session["transcript"])
-        frame = QPixmap(str(db.DB_PATH.parent / "live_frames" / f"{session['session_id']}.jpg"))
-        if not frame.isNull():
+        # Read the bytes and close the handle immediately: constructing
+        # QPixmap from a path can hold the file open on Windows while decoding,
+        # which blocks the candidate side's atomic replace() onto this same
+        # file (WinError 5) and freezes the live feed.
+        pixmap = QPixmap()
+        try:
+            frame_bytes = (
+                db.DB_PATH.parent / "live_frames" / f"{session['session_id']}.jpg"
+            ).read_bytes()
+            if not pixmap.loadFromData(frame_bytes):
+                pixmap = QPixmap()
+        except OSError:
+            pixmap = QPixmap()  # frame not written yet this tick
+        if not pixmap.isNull():
             self.video_label.setPixmap(
-                frame.scaled(self.video_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                pixmap.scaled(self.video_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
             )
         self.status_label.setText("Live session connected. Your next question will appear on the candidate's screen.")
 

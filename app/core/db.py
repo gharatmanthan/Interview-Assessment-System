@@ -504,6 +504,19 @@ def delete_job_posting(job_id):
     conn.close()
 
 
+def get_job_posting(job_id):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM job_postings WHERE job_id = ?", (job_id,)).fetchone()
+    conn.close()
+    if row is None:
+        return None
+    d = dict(row)
+    d["required_skills"] = json.loads(d["required_skills"] or "[]")
+    d["competency_weights"] = json.loads(d["competency_weights"] or "{}")
+    d["adaptive_difficulty"] = bool(d["adaptive_difficulty"])
+    return d
+
+
 def get_all_job_postings():
     conn = get_connection()
     rows = conn.execute("SELECT * FROM job_postings ORDER BY created_at DESC").fetchall()
@@ -543,6 +556,13 @@ def set_job_posting_active(job_id, is_active):
     )
     conn.commit()
     conn.close()
+
+
+def get_session(session_id):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 def get_all_sessions():

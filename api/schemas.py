@@ -101,6 +101,7 @@ class ScoringRequest(BaseModel):
     question_id: str
     category: str
     transcript: str
+    job_description: Optional[str] = None  # overrides session-linked JD for RAG retrieval
 
 
 class CompetencyScoreResponse(BaseModel):
@@ -129,6 +130,8 @@ class ScoringResult(BaseModel):
     score: CompetencyScoreResponse
     explanation: ExplanationResponse
     fairness: FairnessFlagResponse
+    ml_score: Optional[float] = None          # trained-model signal; None until trained
+    rubric_source: str = "static_category_lookup"  # "retrieval:<backend>" when RAG ran
 
 
 class DashboardStats(BaseModel):
@@ -163,6 +166,24 @@ class IntegrityFlagResponse(BaseModel):
     timestamp: Optional[str] = None
     candidate_name: Optional[str] = None
     job_title: Optional[str] = None
+
+
+class IntegrityFlagCreate(BaseModel):
+    """One integrity flag produced by a client-side (local) scan.
+
+    In remote mode the candidate's Electron app runs port/process scans on
+    its own machine and POSTs the results here; the central server just
+    persists them so they show up in the recruiter's Integrity Log.
+    """
+    session_id: str
+    flag_type: str
+    detail: str
+    severity: str = "medium"
+    timestamp: Optional[str] = None
+
+
+class IntegrityFlagBatch(BaseModel):
+    flags: list[IntegrityFlagCreate]
 
 
 class SettingsUpdate(BaseModel):

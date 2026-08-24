@@ -5,6 +5,7 @@ Spawns as a child process from Electron, serves on a random port.
 import sys
 import os
 import argparse
+from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +46,13 @@ app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(devices.router, prefix="/api/devices", tags=["devices"])
 app.include_router(candidate_flow.router, prefix="/api", tags=["candidate-flow"])
 
+# Uploaded interview recordings (data/uploads/<session_id>/<file>) are served
+# back at /media/uploads/... so the recruiter's Reports page can play or
+# download them even when the central server runs on a different machine.
+MEDIA_DIR = Path(__file__).parent.parent / "data" / "uploads"
+MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
+
 
 @app.get("/health")
 def health_check():
@@ -55,7 +63,14 @@ if __name__ == "__main__":
     import uvicorn
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--port", type=int, default=None)
     args = parser.parse_args()
 
-    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
+    # DEPLOY_MODE=remote is set on the hosted central instance (Render/Railway):
+    # bind all interfaces and honor the platform's PORT env var. Without it the
+    # default stays loopback-only, exactly as the Electron sidecar expects.
+    is_remote = os.environ.get("DEPLOY_MODE") == "remote"
+    host = "0.0.0.0" if is_remote else "127.0.0.1"
+    port = args.port or int(os.environ.get("PORT", 8000))
+
+    uvicorn.run(app, host=host, port=port, log_level="warning")

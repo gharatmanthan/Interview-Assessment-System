@@ -1,5 +1,8 @@
 from pathlib import Path
 from uuid import uuid4
+import logging
+import shutil
+import time
 
 import cv2
 import numpy as np
@@ -20,6 +23,34 @@ from app.core.models import InterviewSession
 from app.candidate.integrity import ExternalDeviceMonitor
 from app.candidate.face_recognition import verify_enrolled_face, verify_single_face, has_enrolled_face
 from app.engine.stt import transcribe
+
+logger = logging.getLogger(__name__)
+
+
+def _safe_replace(src: Path, dest: Path, retries: int = 3, delay: float = 0.02):
+    """Windows-safe replace: retries briefly on transient locks (readers,
+    antivirus/indexing services), falls back to a direct overwrite
+    (non-atomic but never crashes) if still locked.
+    """
+    for attempt in range(retries):
+        try:
+            src.replace(dest)
+            return
+        except PermissionError:
+            if attempt == retries - 1:
+                break
+            time.sleep(delay)
+
+    # Final fallback: direct overwrite. Slightly less safe against a reader
+    # catching a half-written frame, but this is a low-stakes live-preview
+    # thumbnail, not the actual recorded interview file — acceptable tradeoff
+    # over crashing or permanently freezing the preview.
+    try:
+        shutil.copy2(src, dest)
+        src.unlink(missing_ok=True)
+    except OSError:
+        # Give up silently for this one frame; the next timer tick tries again.
+        pass
 
 
 class TranscriptionWorker(QObject):
@@ -319,10 +350,21 @@ class InterviewPage(QWidget):
         if self.frame_count % self.FACE_CHECK_INTERVAL == 0:
             self._update_face_badge(frame)
         display = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        # Atomic write so the recruiter's Live Monitor never reads a half file
-        frame_path = self.live_frame_path.with_suffix(".tmp.jpg")
-        cv2.imwrite(str(frame_path), frame)
-        frame_path.replace(self.live_frame_path)
+        # Atomic write so the recruiter's Live Monitor never reads a half file.
+        # Wrapped so a locked destination (Windows readers/AV) degrades to a
+        # warn-once log instead of spamming a traceback every frame — the local
+        # preview below must keep updating either way.
+        try:
+            frame_path = self.live_frame_path.with_suffix(".tmp.jpg")
+            cv2.imwrite(str(frame_path), frame)
+            _safe_replace(frame_path, self.live_frame_path)
+        except Exception as exc:  # noqa: BLE001 - never let publishing kill rendering
+            if not getattr(self, "_frame_write_warned", False):
+                logger.warning(
+                    "Live frame write issue for session %s, retrying silently: %s",
+                    self.session_id, exc,
+                )
+                self._frame_write_warned = True
         h, w, ch = display.shape
         img = QImage(display.data, w, h, ch * w, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(img).scaled(

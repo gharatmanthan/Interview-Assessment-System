@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { api } from "@/lib/api"
+import { api, getBaseUrl } from "@/lib/api"
 import type { InterviewSession, IntegrityFlag } from "@/lib/types"
 import {
   Camera,
@@ -74,6 +74,7 @@ export default function InterviewPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const integrityPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const [session, setSession] = useState<InterviewSession | null>(null)
   const [isRecording, setIsRecording] = useState(false)
@@ -131,35 +132,82 @@ export default function InterviewPage() {
   }, [])
 
   const connectWebSocket = useCallback((sessionId: string) => {
-    const port = (window as any).__API_PORT__ || 8000
-    const ws = new WebSocket(`ws://localhost:${port}/api/ws/integrity/${sessionId}`)
-    wsRef.current = ws
+    getBaseUrl().then((base) => {
+      const wsUrl = `${base.replace(/^http/, "ws")}/api/ws/integrity/${sessionId}`
+      const ws = new WebSocket(wsUrl)
+      wsRef.current = ws
 
-    ws.onopen = () => setWsConnected(true)
-    ws.onclose = () => setWsConnected(false)
-    ws.onerror = () => setWsConnected(false)
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        if (data && data.flags && Array.isArray(data.flags)) {
-          if (data.flags.length > 0) {
-            setIntegrityFlags((prev) => [...data.flags, ...prev])
+      ws.onopen = () => setWsConnected(true)
+      ws.onclose = () => setWsConnected(false)
+      ws.onerror = () => setWsConnected(false)
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data && data.flags && Array.isArray(data.flags)) {
+            if (data.flags.length > 0) {
+              setIntegrityFlags((prev) => [...data.flags, ...prev])
+            }
+          } else if (Array.isArray(data)) {
+            setIntegrityFlags(data)
+          } else if (data && data.flag_type) {
+            setIntegrityFlags((prev) => [data, ...prev])
           }
-        } else if (Array.isArray(data)) {
-          setIntegrityFlags(data)
-        } else if (data && data.flag_type) {
-          setIntegrityFlags((prev) => [data, ...prev])
+        } catch {
+          // ignore malformed messages
         }
-      } catch {
-        // ignore malformed messages
       }
-    }
+    })
   }, [])
+
+  /**
+   * Integrity monitoring, mode-aware:
+   * - local (single machine): unchanged behavior — server-side WebSocket
+   *   scans run on the same machine as the candidate.
+   * - remote: a central server has NO visibility into this machine's ports
+   *   or processes, so the recruiter's app instead runs the LOCAL scan in
+   *   Electron's main process and uploads flags to the central backend.
+   */
+  const connectIntegrityMonitor = useCallback(async (sessionId: string) => {
+    let mode = "local"
+    try {
+      const cfg = await (window as any).appConfig?.getConfig?.()
+      mode = cfg?.backendMode || "local"
+    } catch {
+      // default to local
+    }
+
+    if (mode === "remote") {
+      const scanAndReport = (await import("@/lib/integrity")).scanAndReport
+      const pushFlags = async () => {
+        try {
+          const flags = await scanAndReport(sessionId)
+          if (flags.length > 0) {
+            setIntegrityFlags((prev) => [
+              ...flags.map((f) => ({ ...f, timestamp: new Date().toISOString() })),
+              ...prev,
+            ])
+          }
+        } catch {
+          // keep polling; transient network errors shouldn't kill the monitor
+        }
+      }
+      await pushFlags()
+      integrityPollRef.current = setInterval(pushFlags, 15000)
+      setWsConnected(true)
+      return
+    }
+
+    connectWebSocket(sessionId)
+  }, [connectWebSocket])
 
   const disconnectWebSocket = useCallback(() => {
     if (wsRef.current) {
       wsRef.current.close()
       wsRef.current = null
+    }
+    if (integrityPollRef.current) {
+      clearInterval(integrityPollRef.current)
+      integrityPollRef.current = null
     }
     setWsConnected(false)
   }, [])
@@ -178,7 +226,7 @@ export default function InterviewPage() {
       setElapsedTime(0)
       setIntegrityFlags([])
       setScoringResult(null)
-      connectWebSocket(sessionId)
+      await connectIntegrityMonitor(sessionId)
       await startCamera()
     } catch (err) {
       console.error("Failed to create session:", err)
@@ -502,6 +550,12 @@ export default function InterviewPage() {
                         {((scoringResult.score?.confidence ?? 0) * 100).toFixed(1)}%
                       </span>
                     </div>
+                    {scoringResult.ml_score !== null && scoringResult.ml_score !== undefined && (
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-muted-foreground">ML model score</span>
+                        <span className="font-medium">{scoringResult.ml_score.toFixed(1)}</span>
+                      </div>
+                    )}
                     {scoringResult.explanation?.summary && (
                       <div className="border-t pt-3">
                         <p className="text-xs font-medium text-muted-foreground">Explanation</p>

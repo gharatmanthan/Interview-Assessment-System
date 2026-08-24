@@ -6,10 +6,12 @@ grounded in the transcript, or a transparent heuristic summary when no
 LLM key is configured (the heuristic path says exactly that, rather than
 pretending to be a semantic explanation).
 """
-import json
+import logging
 
 from app.core.models import ExplanationItem
 from app.engine import llm_client
+
+logger = logging.getLogger(__name__)
 
 
 def _heuristic_explanation(transcript: str, score: float) -> tuple[str, list]:
@@ -40,13 +42,20 @@ def explain_score(session_id: str, question_id: str, transcript: str,
             )
             user = f"Score given: {score}/100\n\nTranscript:\n{transcript}"
             raw = llm_client.ask_llm(system, user, json_mode=True)
-            data = json.loads(raw)
-            summary, supporting = data["summary"], data.get("supporting_phrases", [])
-        except Exception:
+            data = llm_client.parse_llm_json(raw)
+            summary = str(data["summary"])
+            supporting = [str(p) for p in data.get("supporting_phrases", [])]
+            logger.info("explain_score[%s/%s]: LLM path", session_id, question_id)
+        except Exception as exc:
+            logger.warning(
+                "explain_score[%s/%s]: LLM explanation failed (%s: %s) — falling back to heuristic",
+                session_id, question_id, type(exc).__name__, exc,
+            )
             summary, supporting = None, None
 
     if summary is None:
         summary, supporting = _heuristic_explanation(transcript, score)
+        logger.info("explain_score[%s/%s]: heuristic path", session_id, question_id)
 
     return ExplanationItem(
         session_id=session_id,

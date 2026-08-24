@@ -7,12 +7,14 @@ transcript, rescore the variant with the same scorer, and flag any
 answer where the score shifts meaningfully — that shift is evidence the
 scorer is picking up on identity-coded language rather than content.
 """
-import json
+import logging
 import re
 
 from app.core.models import FairnessFlag
 from app.engine import llm_client
 from app.engine.scoring import _heuristic_score
+
+logger = logging.getLogger(__name__)
 
 PRONOUN_SWAPS = {
     "he": "she", "she": "he",
@@ -47,12 +49,18 @@ def audit_bias(session_id: str, question_id: str, transcript: str,
         try:
             system = 'Score this interview answer 0-100 for quality. Respond ONLY as JSON: {"score": <0-100>}'
             raw = llm_client.ask_llm(system, variant, json_mode=True)
-            variant_score = float(json.loads(raw)["score"])
-        except Exception:
+            variant_score = float(llm_client.parse_llm_json(raw)["score"])
+            logger.info("audit_bias[%s/%s]: LLM path", session_id, question_id)
+        except Exception as exc:
+            logger.warning(
+                "audit_bias[%s/%s]: LLM rescore failed (%s: %s) — falling back to heuristic",
+                session_id, question_id, type(exc).__name__, exc,
+            )
             variant_score = None
 
     if variant_score is None:
         variant_score, _ = _heuristic_score(variant, {"criteria": []})
+        logger.info("audit_bias[%s/%s]: heuristic path", session_id, question_id)
 
     delta = round(variant_score - original_score, 1)
     flagged = abs(delta) >= FLAG_THRESHOLD

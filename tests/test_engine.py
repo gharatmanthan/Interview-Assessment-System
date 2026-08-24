@@ -36,12 +36,14 @@ class TestRetrieveRubric:
         assert "time complexity" in rubric["criteria"]
         assert rubric["weight"] == 1.3
 
-    def test_category_matching_ignores_case_and_whitespace(self):
-        assert rag.retrieve_rubric("", " System Design ") == rag.RUBRIC_BANK["system design"]
+    def test_category_matching_ignores_case_whitespace_and_underscores(self):
+        static = dict(rag.RUBRIC_BANK["system design"])
+        assert rag.retrieve_rubric("", " System Design ") == {**static, "retrieval_used": False}
+        assert rag.retrieve_rubric("", "system_design") == {**static, "retrieval_used": False}
 
     def test_unknown_category_falls_back_to_default(self):
         rubric = rag.retrieve_rubric("Any Title", "quantum computing")
-        assert rubric == rag.DEFAULT_RUBRIC
+        assert rubric == {**rag.DEFAULT_RUBRIC, "retrieval_used": False}
 
 
 class TestHeuristicScore:
@@ -183,7 +185,10 @@ class TestJdMatcher:
 
     def test_match_against_jd_with_no_known_skills_scores_zero(self):
         result = jd_matcher.match_resume_to_jd({"skills": ["Python"]}, "Weld pipes all day.")
-        assert result == {"match_score": 0.0, "matched_skills": [], "missing_skills": []}
+        assert result["match_score"] == 0.0
+        assert result["matched_skills"] == []
+        assert result["missing_skills"] == []
+        assert result["matched_by"] == "keyword_overlap"
 
     def test_partial_overlap_reports_missing_skills(self):
         resume = {"skills": ["Python"]}

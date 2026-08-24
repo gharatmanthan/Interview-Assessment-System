@@ -17,6 +17,16 @@ DEFAULTS = {
     "llm_provider": "Groq",
     "llm_api_key": "",
     "export_dir": str(Path.home() / "Documents"),
+    # How this desktop app reaches the API:
+    #   "local"  — Electron spawns api/main.py as a child process (single
+    #              machine / on-site use, works with zero setup)
+    #   "remote" — no local spawn; all shared data goes to remote_api_url
+    #              (the central deployed server) over HTTPS
+    "backend_mode": "local",
+    # Central server base URL used when backend_mode == "remote".
+    # Empty means not configured yet -> Electron shows the one-time
+    # server-address setup screen on first launch.
+    "remote_api_url": "",
 }
 
 

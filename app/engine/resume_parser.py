@@ -7,10 +7,13 @@ Extracts raw text from PDF/DOCX/TXT resumes, then either uses the LLM
 to a keyword/regex heuristic. Output feeds jd_matcher.py.
 """
 import json
+import logging
 import re
 from pathlib import Path
 
 from app.engine import llm_client
+
+logger = logging.getLogger(__name__)
 
 COMMON_SKILLS = [
     "python", "java", "javascript", "typescript", "c++", "c#", "sql", "nosql",
@@ -73,12 +76,18 @@ def parse_resume(file_path: str) -> dict:
                 '"experience_years": <float or null>, "education": [str, ...]}'
             )
             raw = llm_client.ask_llm(system, raw_text[:6000], json_mode=True)
-            structured = json.loads(raw)
-        except Exception:
+            structured = llm_client.parse_llm_json(raw)
+            logger.info("parse_resume: LLM path")
+        except Exception as exc:
+            logger.warning(
+                "parse_resume: LLM parsing failed (%s: %s) — falling back to regex heuristic",
+                type(exc).__name__, exc,
+            )
             structured = None
 
     if structured is None:
         structured = _heuristic_parse(raw_text)
+        logger.info("parse_resume: heuristic path")
 
     return {
         "raw_text": raw_text,

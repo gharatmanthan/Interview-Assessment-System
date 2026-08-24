@@ -1,0 +1,138 @@
+"use client"
+
+import { useCallback, useEffect, useRef, useState } from "react"
+import { Radio, VideoOff } from "lucide-react"
+import { api } from "@/lib/api"
+import type { InterviewSession } from "@/lib/types"
+import { EmptyState } from "@/components/empty-state"
+import { Badge } from "@/components/ui/badge"
+
+// Poll cadence for both the session list and each frame tile.
+const POLL_MS = 2000
+
+interface Feed {
+  session_id: string
+  candidate_name: string
+  job_title: string
+}
+
+/**
+ * One candidate's live thumbnail. Owns its own frame poll so multiple
+ * candidates update independently (walk-in drives have several at once).
+ */
+function LiveFeedTile({ feed }: { feed: Feed }) {
+  const [frameUrl, setFrameUrl] = useState<string | null>(null)
+  const urlRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function poll() {
+      const url = await api.fetchLiveFrame(feed.session_id)
+      if (cancelled) {
+        if (url) URL.revokeObjectURL(url)
+        return
+      }
+      if (urlRef.current && urlRef.current !== url) URL.revokeObjectURL(urlRef.current)
+      urlRef.current = url
+      setFrameUrl(url)
+    }
+
+    poll()
+    const timer = setInterval(poll, POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current)
+    }
+  }, [feed.session_id])
+
+  return (
+    <div className="overflow-hidden rounded-xl border bg-white shadow-sm">
+      <div className="aspect-video w-full bg-slate-900">
+        {frameUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={frameUrl} alt={`Live feed for ${feed.candidate_name}`} className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-slate-500">
+            <VideoOff className="h-6 w-6" />
+            <span className="text-xs">Waiting for feed&hellip;</span>
+          </div>
+        )}
+      </div>
+      <div className="flex items-center justify-between px-4 py-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold text-slate-900">{feed.candidate_name}</p>
+          <p className="truncate text-xs text-slate-500">{feed.job_title}</p>
+        </div>
+        <Badge className="gap-1.5 bg-red-100 text-red-700 hover:bg-red-100">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" />
+          Live
+        </Badge>
+      </div>
+    </div>
+  )
+}
+
+export default function LiveMonitorPage() {
+  const [feeds, setFeeds] = useState<Feed[]>([])
+  const [loaded, setLoaded] = useState(false)
+
+  const pollSessions = useCallback(async () => {
+    try {
+      const sessions: InterviewSession[] = await api.getSessions()
+      setFeeds(
+        sessions
+          .filter((s) => s.status === "in_progress")
+          .map((s) => ({
+            session_id: s.session_id,
+            candidate_name: s.candidate_name,
+            job_title: s.job_title,
+          }))
+      )
+    } catch {
+      // keep last known list on a transient API hiccup
+    } finally {
+      setLoaded(true)
+    }
+  }, [])
+
+  useEffect(() => {
+    pollSessions()
+    const timer = setInterval(pollSessions, POLL_MS)
+    return () => clearInterval(timer)
+  }, [pollSessions])
+
+  return (
+    <div className="p-8">
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Live Monitor</h1>
+          <p className="text-sm text-slate-500">
+            Watch candidates whose interviews are in progress &mdash; snapshots refresh every {POLL_MS / 1000} seconds.
+          </p>
+        </div>
+        {feeds.length > 0 && (
+          <span className="flex items-center gap-2 text-sm text-slate-500">
+            <Radio className="h-4 w-4 animate-pulse text-red-500" />
+            {feeds.length} active interview{feeds.length > 1 ? "s" : ""}
+          </span>
+        )}
+      </div>
+
+      {!loaded ? null : feeds.length === 0 ? (
+        <EmptyState
+          icon={Radio}
+          title="No live interviews right now"
+          description="When a candidate starts their interview, their camera snapshot appears here automatically."
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {feeds.map((feed) => (
+            <LiveFeedTile key={feed.session_id} feed={feed} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}

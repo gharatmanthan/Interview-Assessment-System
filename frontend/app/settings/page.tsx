@@ -12,7 +12,13 @@ import { Separator } from "@/components/ui/separator"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import { Loader2, Eye, EyeOff } from "lucide-react"
+import { Loader2, Eye, EyeOff, Globe, Laptop } from "lucide-react"
+
+interface ConnectionConfig {
+  backendMode: string
+  remoteApiUrl: string
+  needsSetup: boolean
+}
 
 export default function SettingsPage() {
   const [loading, setLoading] = useState(true)
@@ -29,6 +35,8 @@ export default function SettingsPage() {
   })
 
   const [devices, setDevices] = useState<DeviceInfo[]>([])
+  const [conn, setConn] = useState<ConnectionConfig | null>(null)
+  const [savingConn, setSavingConn] = useState(false)
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -46,6 +54,41 @@ export default function SettingsPage() {
   }, [])
 
   useEffect(() => { fetchData() }, [fetchData])
+
+  // Connection config is per-machine Electron state (not part of the shared
+  // backend settings), so it comes through the preload bridge.
+  const loadConnection = useCallback(async () => {
+    try {
+      const cfg = await (window as any).appConfig?.getConfig?.()
+      if (cfg) setConn({ backendMode: cfg.backendMode, remoteApiUrl: cfg.remoteApiUrl || "", needsSetup: cfg.needsSetup })
+    } catch {
+      // Outside Electron: no connection section
+    }
+  }, [])
+
+  useEffect(() => { loadConnection() }, [loadConnection])
+
+  async function handleSaveConnection() {
+    if (!conn) return
+    setSavingConn(true)
+    try {
+      const update =
+        conn.backendMode === "local"
+          ? { backendMode: "local" }
+          : { backendMode: "remote", remoteApiUrl: conn.remoteApiUrl.trim().replace(/\/+$/, "") }
+      await (window as any).appConfig?.setConfig?.(update)
+      toast.success("Connection settings saved")
+      if ((window as any).appConfig?.restartWindow) {
+        await (window as any).appConfig.restartWindow()
+      } else {
+        await loadConnection()
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Failed to save connection settings")
+    } finally {
+      setSavingConn(false)
+    }
+  }
 
   const cameras = devices.filter((d) => d.device_class === "camera")
   const microphones = devices.filter((d) => d.device_class === "microphone")
@@ -100,6 +143,57 @@ export default function SettingsPage() {
         <Card className="bg-white">
           <CardContent className="p-6">
             <form onSubmit={handleSave} className="space-y-6">
+              {/* Connection (Electron-only) */}
+              {conn && (
+                <div className="space-y-4">
+                  <h3 className="text-sm font-semibold text-slate-900">Connection</h3>
+                  <p className="text-xs text-slate-400">
+                    Where interview data lives. Integrity checks always run locally on this machine.
+                  </p>
+                  <div className="space-y-2">
+                    <Label>Backend mode</Label>
+                    <Select
+                      value={conn.backendMode}
+                      onValueChange={(val) => setConn((c) => (c ? { ...c, backendMode: val } : c))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="remote">
+                          <span className="flex items-center gap-2"><Globe className="h-4 w-4" /> Remote interview server</span>
+                        </SelectItem>
+                        <SelectItem value="local">
+                          <span className="flex items-center gap-2"><Laptop className="h-4 w-4" /> This computer only</span>
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {conn.backendMode === "remote" && (
+                    <div className="space-y-2">
+                      <Label htmlFor="remote-api-url">Server address</Label>
+                      <Input
+                        id="remote-api-url"
+                        value={conn.remoteApiUrl}
+                        onChange={(e) => setConn((c) => (c ? { ...c, remoteApiUrl: e.target.value } : c))}
+                        placeholder="https://interviewiq-api.onrender.com"
+                      />
+                    </div>
+                  )}
+                  <div className="flex justify-end">
+                    <Button type="button" variant="outline" size="sm" onClick={handleSaveConnection} disabled={savingConn}>
+                      {savingConn ? (
+                        <><Loader2 className="mr-2 h-3 w-3 animate-spin" /> Saving...</>
+                      ) : (
+                        "Save connection"
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              <Separator />
+
               {/* Device Selection */}
               <div className="space-y-4">
                 <h3 className="text-sm font-semibold text-slate-900">Device Selection</h3>
