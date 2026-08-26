@@ -27,6 +27,10 @@ DEFAULTS = {
     # Empty means not configured yet -> Electron shows the one-time
     # server-address setup screen on first launch.
     "remote_api_url": "",
+    # Gmail integration — OAuth tokens stored here, never in SQLite
+    "gmail_connected": False,
+    "gmail_user": "",
+    "gmail_refresh_token": "",
 }
 
 

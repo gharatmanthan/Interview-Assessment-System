@@ -46,7 +46,7 @@ export function SkillTagInput({ value, onChange, placeholder = "Add a skill..." 
           <button
             type="button"
             onClick={() => removeSkill(skill)}
-            className="ml-0.5 rounded-full p-0.5 hover:bg-slate-200"
+            className="ml-0.5 rounded-full p-0.5 hover:bg-muted"
           >
             <X className="h-3 w-3" />
           </button>

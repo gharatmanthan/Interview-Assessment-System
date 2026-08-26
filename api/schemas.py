@@ -35,6 +35,8 @@ class JobPostingCreate(BaseModel):
     time_limit_seconds: int = 120
     adaptive_difficulty: bool = True
     competency_weights: dict[str, float] = {}
+    screening_threshold: float = 60.0
+    application_gmail_label: str = ""
 
 
 class JobPostingResponse(BaseModel):
@@ -49,6 +51,8 @@ class JobPostingResponse(BaseModel):
     adaptive_difficulty: bool
     competency_weights: dict[str, float]
     created_at: Optional[str] = None
+    screening_threshold: float = 60.0
+    application_gmail_label: str = ""
 
 
 class CandidateCreate(BaseModel):
@@ -74,6 +78,9 @@ class CandidateResponse(BaseModel):
     matched_skills: list[str] = []
     missing_skills: list[str] = []
     job_title: Optional[str] = None
+    source: str = "manual"
+    screening_status: str = "pending"
+    invite_email_sent: bool = False
 
 
 class SessionCreate(BaseModel):
@@ -188,8 +195,6 @@ class IntegrityFlagBatch(BaseModel):
 
 class SettingsUpdate(BaseModel):
     camera_index: Optional[int] = None
-    # The desktop UI stores the mic as a device index (int); accept both so
-    # saving settings from the UI never breaks GET /api/settings validation.
     mic_device: Optional[Union[str, int]] = None
     llm_provider: Optional[str] = None
     llm_api_key: Optional[str] = None
@@ -202,6 +207,8 @@ class SettingsResponse(BaseModel):
     llm_provider: str = "Groq"
     llm_api_key: str = ""
     export_dir: str = ""
+    gmail_connected: bool = False
+    gmail_user: str = ""
 
 
 class DeviceInfo(BaseModel):
@@ -213,3 +220,40 @@ class DeviceInfo(BaseModel):
 class ResendInviteResponse(BaseModel):
     invite_code: str
     message: str
+
+
+class GmailStatusResponse(BaseModel):
+    connected: bool
+    email: str = ""
+
+
+class GmailConnectResponse(BaseModel):
+    success: bool
+    email: str = ""
+    message: str = ""
+
+
+class EmailCheckRequest(BaseModel):
+    job_id: str
+
+
+class EmailCheckResponse(BaseModel):
+    results: list[dict]
+    summary: str
+
+
+class PollLogEntry(BaseModel):
+    id: int
+    run_at: str
+    job_id: str
+    job_title: str
+    total_checked: int
+    invited: int
+    below_threshold: int
+    skipped: int
+    failed: int
+    mode: str
+
+
+class PollLogResponse(BaseModel):
+    logs: list[PollLogEntry]

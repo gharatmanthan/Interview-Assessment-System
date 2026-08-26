@@ -120,6 +120,24 @@ def init_db():
         status TEXT NOT NULL DEFAULT 'live',
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS processed_emails (
+        message_id TEXT PRIMARY KEY,
+        job_id TEXT NOT NULL,
+        candidate_id TEXT,
+        processed_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS email_poll_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_at TEXT NOT NULL,
+        job_id TEXT NOT NULL,
+        job_title TEXT NOT NULL,
+        total_checked INTEGER NOT NULL DEFAULT 0,
+        invited INTEGER NOT NULL DEFAULT 0,
+        below_threshold INTEGER NOT NULL DEFAULT 0,
+        skipped INTEGER NOT NULL DEFAULT 0,
+        failed INTEGER NOT NULL DEFAULT 0,
+        mode TEXT NOT NULL DEFAULT 'auto'
+    );
     """)
     conn.execute(
         """INSERT OR IGNORE INTO candidate_accounts
@@ -131,6 +149,7 @@ def init_db():
     conn.close()
     _migrate_candidates_resume_columns()
     _migrate_job_postings_active_column()
+    _migrate_email_intake_columns()
 
 
 def _hash_password(password: str, salt: str) -> str:
@@ -170,6 +189,31 @@ def _migrate_candidates_resume_columns():
     for col, col_type in new_columns.items():
         if col not in existing:
             conn.execute(f"ALTER TABLE candidates ADD COLUMN {col} {col_type}")
+    conn.commit()
+    conn.close()
+
+
+def _migrate_email_intake_columns():
+    """Adds source, screening_status, invite_email_sent to candidates and
+    screening_threshold, application_gmail_label to job_postings for the
+    email-to-invite pipeline feature.
+    """
+    conn = get_connection()
+    cand_cols = {row["name"] for row in conn.execute("PRAGMA table_info(candidates)").fetchall()}
+    for col, col_type, default in [
+        ("source", "TEXT", "'manual'"),
+        ("screening_status", "TEXT", "'pending'"),
+        ("invite_email_sent", "INTEGER", "0"),
+    ]:
+        if col not in cand_cols:
+            conn.execute(f"ALTER TABLE candidates ADD COLUMN {col} {col_type} NOT NULL DEFAULT {default}")
+    job_cols = {row["name"] for row in conn.execute("PRAGMA table_info(job_postings)").fetchall()}
+    for col, col_type, default in [
+        ("screening_threshold", "REAL", "60.0"),
+        ("application_gmail_label", "TEXT", "''"),
+    ]:
+        if col not in job_cols:
+            conn.execute(f"ALTER TABLE job_postings ADD COLUMN {col} {col_type} NOT NULL DEFAULT {default}")
     conn.commit()
     conn.close()
 
@@ -237,6 +281,8 @@ def _decode_candidate_row(d: dict) -> dict:
     for key in ("resume_skills", "matched_skills", "missing_skills"):
         raw = d.get(key)
         d[key] = json.loads(raw) if raw else []
+    if "invite_email_sent" in d:
+        d["invite_email_sent"] = bool(d["invite_email_sent"])
     return d
 
 
@@ -246,15 +292,18 @@ def save_candidate(candidate):
     conn.execute(
         """INSERT OR REPLACE INTO candidates
         (candidate_id, job_id, name, email, invite_code, status, session_id, invited_at,
-         resume_path, resume_skills, experience_years, match_score, matched_skills, missing_skills)
+         resume_path, resume_skills, experience_years, match_score, matched_skills, missing_skills,
+         source, screening_status, invite_email_sent)
         VALUES (:candidate_id, :job_id, :name, :email, :invite_code, :status, :session_id, :invited_at,
-                :resume_path, :resume_skills, :experience_years, :match_score, :matched_skills, :missing_skills)""",
+                :resume_path, :resume_skills, :experience_years, :match_score, :matched_skills, :missing_skills,
+                :source, :screening_status, :invite_email_sent)""",
         {
             **d,
             "invited_at": str(d["invited_at"]),
             "resume_skills": json.dumps(d["resume_skills"]),
             "matched_skills": json.dumps(d["matched_skills"]),
             "missing_skills": json.dumps(d["missing_skills"]),
+            "invite_email_sent": int(d["invite_email_sent"]),
         },
     )
     conn.commit()
@@ -354,9 +403,11 @@ def save_job_posting(job):
     conn.execute(
         """INSERT OR REPLACE INTO job_postings
         (job_id, title, description, required_skills, experience_level, department,
-         num_rounds, time_limit_seconds, adaptive_difficulty, competency_weights, created_at)
+         num_rounds, time_limit_seconds, adaptive_difficulty, competency_weights, created_at,
+         screening_threshold, application_gmail_label)
         VALUES (:job_id, :title, :description, :required_skills, :experience_level, :department,
-                :num_rounds, :time_limit_seconds, :adaptive_difficulty, :competency_weights, :created_at)""",
+                :num_rounds, :time_limit_seconds, :adaptive_difficulty, :competency_weights, :created_at,
+                :screening_threshold, :application_gmail_label)""",
         {
             **d,
             "required_skills": json.dumps(d["required_skills"]),
@@ -629,5 +680,94 @@ def get_all_fairness_flags():
         LEFT JOIN sessions s ON f.session_id = s.session_id
         ORDER BY f.id DESC
     """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# --- processed emails (email intake pipeline) ---
+
+def save_processed_email(processed_email):
+    """Record that a Gmail message has been processed, preventing re-processing."""
+    conn = get_connection()
+    d = asdict(processed_email)
+    conn.execute(
+        """INSERT OR IGNORE INTO processed_emails (message_id, job_id, candidate_id, processed_at)
+        VALUES (:message_id, :job_id, :candidate_id, :processed_at)""",
+        {**d, "processed_at": str(d["processed_at"])},
+    )
+    conn.commit()
+    conn.close()
+
+
+def is_email_processed(message_id):
+    """Check whether a Gmail message has already been processed."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT 1 FROM processed_emails WHERE message_id = ?", (message_id,)
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def update_job_screening_threshold(job_id, screening_threshold):
+    """Update the screening threshold for a specific job posting."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE job_postings SET screening_threshold = ? WHERE job_id = ?",
+        (screening_threshold, job_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_candidate_invite_email_sent(candidate_id, sent):
+    """Mark whether the invite email was successfully sent."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE candidates SET invite_email_sent = ? WHERE candidate_id = ?",
+        (int(sent), candidate_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_jobs_with_gmail_labels():
+    """Return all job postings that have a non-empty Gmail label configured."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM job_postings WHERE application_gmail_label != '' ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["required_skills"] = json.loads(d["required_skills"] or "[]")
+        d["competency_weights"] = json.loads(d["competency_weights"] or "{}")
+        d["adaptive_difficulty"] = bool(d["adaptive_difficulty"])
+        out.append(d)
+    return out
+
+
+# --- email poll log (background automation tracking) ---
+
+def save_poll_log(job_id, job_title, total, invited, below_threshold, skipped, failed, mode="auto"):
+    """Record one background poll run for auditing."""
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO email_poll_log
+        (run_at, job_id, job_title, total_checked, invited, below_threshold, skipped, failed, mode)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (str(datetime.utcnow()), job_id, job_title, total, invited, below_threshold, skipped, failed, mode),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_poll_logs(limit=50):
+    """Return the most recent poll run log entries."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM email_poll_log ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
     conn.close()
     return [dict(r) for r in rows]

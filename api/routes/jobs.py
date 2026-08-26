@@ -25,6 +25,8 @@ def create_job(req: JobPostingCreate):
         time_limit_seconds=req.time_limit_seconds,
         adaptive_difficulty=req.adaptive_difficulty,
         competency_weights=req.competency_weights,
+        screening_threshold=req.screening_threshold,
+        application_gmail_label=req.application_gmail_label,
     )
     db.save_job_posting(job)
     return req
@@ -43,6 +45,8 @@ def update_job(job_id: str, req: JobPostingCreate):
         time_limit_seconds=req.time_limit_seconds,
         adaptive_difficulty=req.adaptive_difficulty,
         competency_weights=req.competency_weights,
+        screening_threshold=req.screening_threshold,
+        application_gmail_label=req.application_gmail_label,
     )
     db.save_job_posting(job)
     return req

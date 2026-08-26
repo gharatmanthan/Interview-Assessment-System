@@ -91,3 +91,48 @@ Candidate laptop (Electron)                Central server (Render)           Rec
 - [x] Locally-generated flags appear in the recruiter's Integrity Log (stored centrally).
 - [x] Recordings upload and play back through the recruiter's Reports page.
 - [x] No code path requires or assumes a plain web browser.
+
+## Gmail Integration (Email-to-Invite Pipeline)
+
+### One-time Google Cloud setup
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/).
+2. Create a new project (e.g. "InterviewIQ Email Integration").
+3. Enable the **Gmail API** under APIs & Services → Library.
+4. Go to APIs & Services → Credentials → Create Credentials → OAuth 2.0 Client ID.
+5. Configure the **OAuth consent screen**:
+   - User type: External (Testing mode is fine for student projects).
+   - Add your test Gmail accounts as test users.
+6. Add scopes: `gmail.readonly`, `gmail.send`, `gmail.labels`.
+7. Create a **Desktop app** OAuth client ID.
+8. Download the `client_secret.json` file.
+
+### Configure the application
+
+1. Place `client_secret.json` in the `data/` directory (already gitignored).
+2. In the app, go to **Settings → Email Integration → Connect Gmail**.
+3. Complete the OAuth consent flow in the browser that opens.
+4. Once connected, the status shows "Connected as your-email@gmail.com".
+
+### Per-job configuration
+
+1. Create a Gmail label in your inbox for applications (e.g. "Applications/Senior-Backend").
+2. In the app, edit the job posting and set:
+   - **Gmail Application Label**: the label name (e.g. "Applications/Senior-Backend")
+   - **Screening Threshold**: minimum match score (0-100, default 60) to auto-invite
+3. Forward or have applicants send resumes to the connected Gmail account, tagged with the label.
+
+### How it works
+
+- **Manual trigger**: Click "Check {Job Title}" on the Candidates page to scan for new applications.
+- **Automatic polling** (remote mode only): The server checks every 10 minutes for new emails in configured labels.
+- **Local mode**: Polling only runs while the app is open; use the manual button.
+- Candidates scoring above the threshold are auto-invited with an email containing their invite code.
+- Candidates scoring below the threshold are recorded for transparency but not invited.
+- A recruiter can still manually invite any candidate through the normal "Invite Candidate" flow, overriding the automated screening.
+
+### Security notes
+
+- OAuth refresh tokens are stored in `data/settings.json` (gitignored), never in SQLite.
+- The `client_secret.json` file must never be committed to version control.
+- The connected Gmail account's refresh token gives read/send access — treat it as a secret.

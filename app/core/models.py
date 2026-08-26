@@ -98,6 +98,9 @@ class Candidate:
     match_score: Optional[float] = None
     matched_skills: list = field(default_factory=list)
     missing_skills: list = field(default_factory=list)
+    source: str = "manual"              # "manual" | "email_auto"
+    screening_status: str = "pending"   # "pending" | "passed_threshold" | "below_threshold"
+    invite_email_sent: bool = False     # True only after confirmed Gmail send success
 
 
 @dataclass
@@ -118,6 +121,8 @@ class JobPosting:
     # competency category -> weight (0-100), should sum to 100
     competency_weights: dict = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.utcnow)
+    screening_threshold: float = 60.0       # 0-100, recruiter-configurable per job
+    application_gmail_label: str = ""       # Gmail label to watch for applications
 
 
 @dataclass
@@ -137,3 +142,14 @@ class InterviewSession:
     started_at: datetime = field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None
     status: str = "in_progress"   # "in_progress" | "scoring" | "complete"
+
+
+@dataclass
+class ProcessedEmail:
+    """Record of a Gmail message that has been processed by the email intake pipeline.
+    Prevents re-processing the same email on every poll.
+    """
+    message_id: str                        # Gmail's unique message ID (primary key)
+    job_id: str
+    candidate_id: Optional[str] = None     # None if resume parsing failed before Candidate creation
+    processed_at: datetime = field(default_factory=datetime.utcnow)

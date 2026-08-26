@@ -6,22 +6,48 @@
   :root {
     --background: 230 15% 97%;
     --foreground: 230 25% 11%;
-    --primary: 239 84% 67%;
+    --primary: 243 75% 59%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 174 84% 40%;
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 230 25% 11%;
     --muted: 220 14% 96%;
     --muted-foreground: 220 9% 46%;
+    --accent: 220 14% 96%;
+    --accent-foreground: 230 25% 11%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 38 92% 20%;
+    --success: 160 84% 39%;
+    --success-foreground: 0 0% 100%;
     --border: 220 13% 91%;
-    --ring: 239 84% 67%;
+    --input: 220 13% 91%;
+    --ring: 243 75% 59%;
     --radius: 0.75rem;
     --card: 0 0% 100%;
     --card-foreground: 230 25% 11%;
-    --destructive: 0 84% 60%;
-    --warning: 38 92% 50%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 230 25% 11%;
+
+    /* Semantic status tokens */
+    --success-bg: 138 76% 93%;
+    --success-text: 160 84% 29%;
+    --warning-bg: 38 92% 93%;
+    --warning-text: 32 95% 35%;
+    --destructive-bg: 0 86% 95%;
+    --destructive-text: 0 84% 45%;
+
+    /* Sidebar */
+    --sidebar: 228 19% 14%;
+    --sidebar-hover: 228 19% 20%;
   }
 }
 
 @layer base {
-  * { @apply border-border; }
-  body { @apply bg-slate-50 text-slate-900 antialiased; }
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
 }

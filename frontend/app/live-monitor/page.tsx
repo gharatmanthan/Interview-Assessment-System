@@ -7,7 +7,6 @@ import type { InterviewSession } from "@/lib/types"
 import { EmptyState } from "@/components/empty-state"
 import { Badge } from "@/components/ui/badge"
 
-// Poll cadence for both the session list and each frame tile.
 const POLL_MS = 2000
 
 interface Feed {
@@ -16,10 +15,6 @@ interface Feed {
   job_title: string
 }
 
-/**
- * One candidate's live thumbnail. Owns its own frame poll so multiple
- * candidates update independently (walk-in drives have several at once).
- */
 function LiveFeedTile({ feed }: { feed: Feed }) {
   const [frameUrl, setFrameUrl] = useState<string | null>(null)
   const urlRef = useRef<string | null>(null)
@@ -48,13 +43,12 @@ function LiveFeedTile({ feed }: { feed: Feed }) {
   }, [feed.session_id])
 
   return (
-    <div className="overflow-hidden rounded-xl border bg-white shadow-sm">
-      <div className="aspect-video w-full bg-slate-900">
+    <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+      <div className="aspect-video w-full bg-foreground">
         {frameUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
           <img src={frameUrl} alt={`Live feed for ${feed.candidate_name}`} className="h-full w-full object-cover" />
         ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-slate-500">
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-white/50">
             <VideoOff className="h-6 w-6" />
             <span className="text-xs">Waiting for feed&hellip;</span>
           </div>
@@ -62,11 +56,11 @@ function LiveFeedTile({ feed }: { feed: Feed }) {
       </div>
       <div className="flex items-center justify-between px-4 py-3">
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-slate-900">{feed.candidate_name}</p>
-          <p className="truncate text-xs text-slate-500">{feed.job_title}</p>
+          <p className="truncate text-sm font-semibold text-foreground">{feed.candidate_name}</p>
+          <p className="truncate text-xs leading-relaxed text-muted-foreground">{feed.job_title}</p>
         </div>
-        <Badge className="gap-1.5 bg-red-100 text-red-700 hover:bg-red-100">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" />
+        <Badge variant="destructive" className="gap-1.5">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-destructive" />
           Live
         </Badge>
       </div>
@@ -91,7 +85,6 @@ export default function LiveMonitorPage() {
           }))
       )
     } catch {
-      // keep last known list on a transient API hiccup
     } finally {
       setLoaded(true)
     }
@@ -104,17 +97,17 @@ export default function LiveMonitorPage() {
   }, [pollSessions])
 
   return (
-    <div className="p-8">
+    <div className="px-8 py-6">
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Live Monitor</h1>
-          <p className="text-sm text-slate-500">
+          <h1 className="text-2xl font-bold text-foreground">Live Monitor</h1>
+          <p className="text-sm leading-relaxed text-muted-foreground">
             Watch candidates whose interviews are in progress &mdash; snapshots refresh every {POLL_MS / 1000} seconds.
           </p>
         </div>
         {feeds.length > 0 && (
-          <span className="flex items-center gap-2 text-sm text-slate-500">
-            <Radio className="h-4 w-4 animate-pulse text-red-500" />
+          <span className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Radio className="h-4 w-4 animate-pulse text-destructive" />
             {feeds.length} active interview{feeds.length > 1 ? "s" : ""}
           </span>
         )}

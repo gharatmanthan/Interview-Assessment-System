@@ -36,14 +36,14 @@ export default function CandidateEntryPage() {
   }
 
   return (
-    <Card className="rounded-2xl border bg-white shadow-lg">
+    <Card className="rounded-2xl shadow-lg">
       <CardContent className="p-8">
         <div className="text-center mb-8">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-white font-bold text-xl">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-primary-foreground font-bold text-xl">
             IQ
           </div>
-          <h1 className="mt-4 text-2xl font-bold text-slate-900">Welcome</h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <h1 className="mt-4 text-2xl font-bold text-foreground">Welcome</h1>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
             Enter your invite code to begin the interview
           </p>
         </div>
@@ -63,7 +63,7 @@ export default function CandidateEntryPage() {
           </div>
 
           {error && (
-            <p className="text-sm text-red-500 text-center">{error}</p>
+            <p className="text-sm text-destructive text-center">{error}</p>
           )}
 
           <Button

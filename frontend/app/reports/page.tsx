@@ -23,28 +23,28 @@ import { FileText } from "lucide-react"
 import { EmptyState } from "@/components/empty-state"
 
 function scoreColor(score: number): string {
-  if (score >= 75) return "text-emerald-600"
-  if (score >= 50) return "text-amber-600"
-  return "text-red-600"
+  if (score >= 75) return "text-success-text"
+  if (score >= 50) return "text-warning-text"
+  return "text-destructive-text"
 }
 
 function scoreBarColor(score: number): string {
-  if (score >= 75) return "bg-emerald-500"
-  if (score >= 50) return "bg-amber-500"
-  return "bg-red-500"
+  if (score >= 75) return "bg-success"
+  if (score >= 50) return "bg-warning"
+  return "bg-destructive"
 }
 
-function statusVariant(s: string): "default" | "secondary" | "destructive" | "outline" {
-  if (s === "completed") return "default"
-  if (s === "in_progress") return "secondary"
+function statusVariant(s: string): "default" | "secondary" | "destructive" | "outline" | "success" | "warning" {
+  if (s === "completed") return "success"
+  if (s === "in_progress") return "warning"
   if (s === "failed") return "destructive"
   return "outline"
 }
 
 function medalBadge(rank: number) {
-  if (rank === 1) return <Badge className="bg-yellow-400 text-yellow-900 border-yellow-500">Gold</Badge>
-  if (rank === 2) return <Badge className="bg-slate-300 text-slate-700 border-slate-400">Silver</Badge>
-  if (rank === 3) return <Badge className="bg-amber-600 text-amber-50 border-amber-700">Bronze</Badge>
+  if (rank === 1) return <Badge className="bg-warning/20 text-warning-foreground border-warning/30">Gold</Badge>
+  if (rank === 2) return <Badge className="bg-muted text-muted-foreground border-border">Silver</Badge>
+  if (rank === 3) return <Badge className="bg-warning-bg text-warning-text border-warning/20">Bronze</Badge>
   return null
 }
 
@@ -77,8 +77,6 @@ export default function ReportsPage() {
     api.getCandidateReport(selectedId).then(setReport).catch(() => setReport(null)).finally(() => setLoadingReport(false))
   }, [selectedId])
 
-  // Export links and recording playback all resolve against whichever backend
-  // this app is connected to (local sidecar or central server).
   useEffect(() => {
     if (!report) { setPdfUrl(null); setCsvUrl(null); setRecordingUrl(null); return }
     const sid = report.session.session_id
@@ -121,11 +119,11 @@ export default function ReportsPage() {
     : []
 
   return (
-    <div className="min-h-screen bg-slate-50 p-8">
+    <div className="min-h-screen bg-background p-8">
       <div className="mx-auto max-w-7xl">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-slate-900">Reports</h1>
-          <p className="mt-1 text-slate-500">Interview results and analytics</p>
+          <h1 className="text-3xl font-bold text-foreground">Reports</h1>
+          <p className="mt-1 leading-relaxed text-muted-foreground">Interview results and analytics</p>
         </div>
 
         <Tabs defaultValue="sessions">
@@ -136,14 +134,13 @@ export default function ReportsPage() {
 
           <TabsContent value="sessions">
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
-              {/* Session list */}
               <Card className="lg:col-span-2">
                 <CardHeader>
                   <CardTitle className="text-lg">Sessions</CardTitle>
                 </CardHeader>
                 <CardContent>
                   {loadingSessions ? (
-                    <div className="space-y-3 py-4 text-center text-sm text-slate-400">Loading...</div>
+                    <div className="space-y-3 py-4 text-center text-sm text-muted-foreground">Loading...</div>
                   ) : sessions.length === 0 ? (
                     <EmptyState
                       icon={FileText}
@@ -159,15 +156,15 @@ export default function ReportsPage() {
                           className={`w-full rounded-lg border p-3 text-left transition-colors ${
                             selectedId === s.session_id
                               ? "border-primary bg-primary/5"
-                              : "border-slate-200 hover:bg-slate-50"
+                              : "border-border hover:bg-muted/50"
                           }`}
                         >
                           <div className="flex items-center justify-between">
-                            <span className="text-sm font-medium text-slate-900">{s.candidate_name}</span>
+                            <span className="text-sm font-medium text-foreground">{s.candidate_name}</span>
                             <Badge variant={statusVariant(s.status)}>{s.status}</Badge>
                           </div>
-                          <div className="mt-1 text-xs text-slate-500">{s.job_title}</div>
-                          <div className="mt-1 text-xs text-slate-400">{formatDate(s.completed_at || s.started_at)}</div>
+                          <div className="mt-1 text-xs leading-relaxed text-muted-foreground">{s.job_title}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">{formatDate(s.completed_at || s.started_at)}</div>
                         </button>
                       ))}
                     </div>
@@ -175,22 +172,21 @@ export default function ReportsPage() {
                 </CardContent>
               </Card>
 
-              {/* Session detail */}
               <Card className="lg:col-span-3">
                 <CardContent className="pt-6">
                   {!selectedId ? (
-                    <div className="flex h-[400px] items-center justify-center text-sm text-slate-400">
+                    <div className="flex h-[400px] items-center justify-center text-sm text-muted-foreground">
                       Select a session to view details
                     </div>
                   ) : loadingReport ? (
-                    <div className="flex h-[400px] items-center justify-center text-sm text-slate-400">Loading report...</div>
+                    <div className="flex h-[400px] items-center justify-center text-sm text-muted-foreground">Loading report...</div>
                   ) : !report ? (
-                    <div className="flex h-[400px] items-center justify-center text-sm text-slate-400">No report data</div>
+                    <div className="flex h-[400px] items-center justify-center text-sm text-muted-foreground">No report data</div>
                   ) : (
                     <div className="space-y-6">
                       <div>
-                        <h2 className="text-xl font-bold text-slate-900">{report.session.candidate_name}</h2>
-                        <p className="text-sm text-slate-500">{report.session.job_title}</p>
+                        <h2 className="text-xl font-bold text-foreground">{report.session.candidate_name}</h2>
+                        <p className="text-sm leading-relaxed text-muted-foreground">{report.session.job_title}</p>
                       </div>
 
                       <div className="flex items-center gap-4">
@@ -198,27 +194,26 @@ export default function ReportsPage() {
                           {report.overall_score}
                         </div>
                         <div>
-                          <div className="text-sm font-medium text-slate-700">Overall Score</div>
-                          <div className="text-xs text-slate-400">out of 100</div>
+                          <div className="text-sm font-medium text-foreground">Overall Score</div>
+                          <div className="text-xs text-muted-foreground">out of 100</div>
                         </div>
                       </div>
 
                       <Separator />
 
-                      {/* Competency Breakdown */}
                       <div>
-                        <h3 className="mb-3 text-lg font-semibold text-slate-900">Competency Breakdown</h3>
+                        <h3 className="mb-3 text-lg font-semibold text-foreground">Competency Breakdown</h3>
                         <div className="space-y-4">
                           {report.scores.map((score) => {
                             const explanation = report.explanations.find((e) => e.question_id === score.question_id)
                             return (
-                              <div key={score.question_id} className="rounded-lg border border-slate-100 p-3">
+                              <div key={score.question_id} className="rounded-lg border border-border p-3">
                                 <div className="flex items-center justify-between">
-                                  <span className="text-sm font-medium text-slate-800">{score.category}</span>
-                                  <span className="text-xs text-slate-500">{score.confidence}% confidence</span>
+                                  <span className="text-sm font-medium text-foreground">{score.category}</span>
+                                  <span className="text-xs text-muted-foreground">{score.confidence}% confidence</span>
                                 </div>
                                 <div className="mt-2 flex items-center gap-3">
-                                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+                                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
                                     <div
                                       className={`h-full rounded-full transition-all ${scoreBarColor(score.score)}`}
                                       style={{ width: `${score.score}%` }}
@@ -228,7 +223,7 @@ export default function ReportsPage() {
                                 </div>
                                 {explanation && (
                                   <div className="mt-2">
-                                    <p className="text-xs italic text-slate-500">{explanation.summary}</p>
+                                    <p className="text-xs italic leading-relaxed text-muted-foreground">{explanation.summary}</p>
                                     {explanation.supporting_phrases.length > 0 && (
                                       <div className="mt-2 flex flex-wrap gap-1">
                                         {explanation.supporting_phrases.map((phrase, i) => (
@@ -244,21 +239,20 @@ export default function ReportsPage() {
                             )
                           })}
                           {report.scores.length === 0 && (
-                            <p className="text-sm text-slate-400">No competency scores available</p>
+                            <p className="text-sm text-muted-foreground">No competency scores available</p>
                           )}
                         </div>
                       </div>
 
                       <Separator />
 
-                      {/* Interview Recording (uploaded from the candidate's machine) */}
                       {recordingUrl && (
                         <>
                           <div>
-                            <h3 className="mb-3 text-lg font-semibold text-slate-900">Interview Recording</h3>
+                            <h3 className="mb-3 text-lg font-semibold text-foreground">Interview Recording</h3>
                             <video
                               controls
-                              className="w-full rounded-lg border border-slate-200 bg-black"
+                              className="w-full rounded-lg border border-border bg-black"
                               src={recordingUrl}
                             />
                           </div>
@@ -266,15 +260,13 @@ export default function ReportsPage() {
                         </>
                       )}
 
-                      {/* Integrity Flags */}
                       <div>
-                        <h3 className="mb-3 text-lg font-semibold text-slate-900">Integrity Flags</h3>
+                        <h3 className="mb-3 text-lg font-semibold text-foreground">Integrity Flags</h3>
                         <IntegrityFlagsForSession sessionId={report.session.session_id} />
                       </div>
 
                       <Separator />
 
-                      {/* Actions */}
                       <div className="flex gap-3">
                         <Button
                           variant="outline"
@@ -298,10 +290,10 @@ export default function ReportsPage() {
 
           <TabsContent value="comparison">
             {loadingComparison ? (
-              <div className="py-16 text-center text-sm text-slate-400">Loading comparison data...</div>
+              <div className="py-16 text-center text-sm text-muted-foreground">Loading comparison data...</div>
             ) : sortedComparison.length === 0 ? (
               <Card>
-                <CardContent className="py-16 text-center text-sm text-slate-400">
+                <CardContent className="py-16 text-center text-sm text-muted-foreground">
                   No scored sessions yet
                 </CardContent>
               </Card>
@@ -332,7 +324,7 @@ export default function ReportsPage() {
                           <TableHead>Candidate</TableHead>
                           <TableHead>Job</TableHead>
                           <TableHead
-                            className="text-right cursor-pointer hover:text-slate-900 select-none"
+                            className="text-right cursor-pointer hover:text-foreground select-none"
                             onClick={() => handleSort("overall_score")}
                           >
                             Overall <SortIcon field="overall_score" />
@@ -340,7 +332,7 @@ export default function ReportsPage() {
                           {categories.map((cat) => (
                             <TableHead
                               key={cat}
-                              className="text-right cursor-pointer hover:text-slate-900 select-none"
+                              className="text-right cursor-pointer hover:text-foreground select-none"
                               onClick={() => handleSort(cat)}
                             >
                               {cat} <SortIcon field={cat} />
@@ -352,7 +344,7 @@ export default function ReportsPage() {
                         {sortedComparison.map((row, idx) => (
                           <TableRow
                             key={row.session_id}
-                            className="cursor-pointer hover:bg-slate-50"
+                            className="cursor-pointer hover:bg-muted/50"
                             onDoubleClick={() => {
                               setSelectedId(row.session_id)
                               const sessionsTab = document.querySelector('[value="sessions"]') as HTMLElement
@@ -366,7 +358,7 @@ export default function ReportsPage() {
                               </div>
                             </TableCell>
                             <TableCell className="font-medium">{row.candidate_name}</TableCell>
-                            <TableCell className="text-slate-500">{row.job_title}</TableCell>
+                            <TableCell className="text-muted-foreground">{row.job_title}</TableCell>
                             <TableCell className={`text-right font-bold ${scoreColor(row.overall_score)}`}>
                               {row.overall_score}
                             </TableCell>
@@ -401,22 +393,22 @@ function IntegrityFlagsForSession({ sessionId }: { sessionId: string }) {
       .finally(() => setLoading(false))
   }, [sessionId])
 
-  if (loading) return <p className="text-xs text-slate-400">Loading flags...</p>
-  if (flags.length === 0) return <p className="text-xs text-slate-400">No integrity flags for this session</p>
+  if (loading) return <p className="text-xs text-muted-foreground">Loading flags...</p>
+  if (flags.length === 0) return <p className="text-xs text-muted-foreground">No integrity flags for this session</p>
 
   return (
     <div className="space-y-2">
       {flags.map((f, i) => (
-        <div key={i} className="flex items-start gap-3 rounded-lg border border-slate-100 p-3">
+        <div key={i} className="flex items-start gap-3 rounded-lg border border-border p-3">
           <Badge
-            variant={f.severity === "high" ? "destructive" : f.severity === "medium" ? "secondary" : "outline"}
+            variant={f.severity === "high" ? "destructive" : f.severity === "medium" ? "warning" : "success"}
             className="mt-0.5 shrink-0"
           >
             {f.severity}
           </Badge>
           <div className="min-w-0">
-            <span className="text-sm font-medium text-slate-800">{f.flag_type.replace(/_/g, " ")}</span>
-            <p className="mt-0.5 text-xs text-slate-500">{f.detail}</p>
+            <span className="text-sm font-medium text-foreground">{f.flag_type.replace(/_/g, " ")}</span>
+            <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{f.detail}</p>
           </div>
         </div>
       ))}

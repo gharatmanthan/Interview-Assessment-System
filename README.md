@@ -3,7 +3,7 @@
 Academic project (Computer Engineering, group project) exploring **explainability + bias auditing**
 combined with **integrity / AI-assisted-answer detection** for automated interview assessment tools.
 
-## Current status: v0.4 — local/remote dual-mode deployment
+## Current status: v0.5 — email-to-invite candidate pipeline
 
 The app has migrated from a monolithic PySide6 desktop UI to a three-tier architecture:
 **Electron shell → Next.js frontend → FastAPI backend** (Python engine unchanged underneath).
@@ -25,6 +25,13 @@ What works right now:
   scoring/explanation/fairness-audit when `GROQ_API_KEY` is configured (heuristic
   fallback with logged reasons otherwise), and a trained RandomForest scorer
   surfaced as a third, optional score signal
+- **Email-to-invite pipeline** — recruiters connect a Gmail account once; the system
+  watches a configured Gmail label for job applications, auto-screens resumes through
+  the existing resume parser + JD matcher pipeline, and invites qualified candidates
+  (above a configurable threshold) via email with an invite code. Below-threshold
+  candidates are recorded for transparency. Supports both manual trigger and automatic
+  polling (remote mode). Gmail OAuth tokens stored in `data/settings.json`, never in
+  SQLite — see `docs/DEPLOYMENT.md` for Google Cloud setup
 - **Live monitor** — recruiters watch in-progress interviews with live frames
 - **Integrity checks** — port scan, suspicious-process scan, external device monitoring,
   single-face verification; scans run locally inside Electron so they work in both
@@ -61,8 +68,9 @@ What works right now:
 │ FastAPI backend (api/)                                  │
 │  routes: auth, jobs, candidates, sessions, scoring,     │
 │          reports, integrity, settings, devices,         │
-│          candidate-flow                                 │
+│          candidate-flow, email-intake                   │
 │  static: /media/uploads/** (interview recordings)       │
+│  background: Gmail poller (10 min, remote mode)         │
 └───────────────┬─────────────────────────────────────────┘
                 │ imports
 ┌───────────────▼─────────────────────────────────────────┐
@@ -71,8 +79,16 @@ What works right now:
 │  candidate/  capture, face recognition, integrity       │
 │  engine/     Whisper STT, resume parser, JD matcher,    │
 │              RAG rubrics, scoring, explainability,      │
-│              fairness, LLM client                       │
+│              fairness, LLM client, email intake         │
 │  reports/    analytics, PDF export                      │
+└───────────────┬─────────────────────────────────────────┘
+                │ Gmail API (OAuth2)
+┌───────────────▼─────────────────────────────────────────┐
+│ Gmail API (googleapis.com)                              │
+│  • gmail.readonly  — scan application emails            │
+│  • gmail.send      — send invite emails                 │
+│  • gmail.labels    — mark processed messages            │
+│  OAuth tokens stored in data/settings.json (gitignored) │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -87,10 +103,10 @@ interview-assessment-system/
 ├── app/
 │   ├── core/
 │   │   ├── db.py            # SQLite persistence (data/app.db)
-│   │   ├── models.py        # The 5 shared data shapes (see docs/INTERFACES.md)
+│   │   ├── models.py        # Shared data shapes (see docs/INTERFACES.md)
 │   │   ├── auth.py          # Recruiter register/verify (salted hashes)
 │   │   ├── question_bank.py # Interview questions
-│   │   └── settings_store.py# App settings incl. backend_mode/remote_api_url
+│   │   └── settings_store.py# App settings incl. backend_mode, remote_api_url, Gmail tokens
 │   ├── candidate/
 │   │   ├── capture.py       # Video/audio recording (MediaCapture)
 │   │   ├── face_recognition.py # Face enroll / verify / single-face check
@@ -99,6 +115,7 @@ interview-assessment-system/
 │   │   ├── stt.py               # faster-whisper transcription
 │   │   ├── resume_parser.py     # PDF/DOCX resume parsing (LLM or regex heuristic)
 │   │   ├── jd_matcher.py        # LLM semantic JD matching, keyword-overlap fallback
+│   │   ├── email_intake.py      # Gmail API integration, resume screening, auto-invite
 │   │   ├── rag.py               # Rubric retrieval: embedding similarity + static fallback
 │   │   ├── rubric_kb.py         # Hand-authored rubric knowledge base (~50 snippets)
 │   │   ├── embeddings.py        # model2vec → sentence-transformers → TF-IDF chain
@@ -126,7 +143,8 @@ interview-assessment-system/
 │   ├── integrity.ts         # Native port/process scan (no Python needed)
 │   └── preload.ts           # contextBridge: desktopCapturer, integrity, config
 ├── data/                    # Runtime data (gitignored): app.db, settings.json,
-│                            # resumes, face profiles, uploaded recordings
+│                            # resumes, face profiles, uploaded recordings,
+│                            # client_secret.json (Gmail OAuth)
 ├── docs/                    # INTERFACES.md, DEPLOYMENT.md, design specs & plans
 ├── tests/
 └── requirements.txt
@@ -183,14 +201,22 @@ python scripts/compare_heuristic_vs_llm.py # side-by-side heuristic vs LLM score
 ### 5. Trained ML scorer (optional third signal)
 
 ```bash
-python scripts/train_trained_scorer.py     # trains RandomForest, writes data/models/
+python scripts/generate_training_dataset.py   # generates synthetic dataset (~5-10 min)
+python scripts/validate_dataset.py --sample   # exports blind subset for human validation
+python scripts/validate_dataset.py --apply-scores  # ingests human scores, applies corrections
+python scripts/train_trained_scorer.py        # trains RandomForest, writes data/models/
 ```
 
-Currently trained on a small hand-written PLACEHOLDER dataset (clearly marked in
-the script) purely to prove the pipeline — replace it with a real labeled dataset
-before quoting metrics. When `data/models/trained_scorer.joblib` exists, its score
-is returned as `ml_score` in `/api/scoring/run` and shown in the interview UI next
-to the primary score. No model → the signal is simply skipped.
+The scorer is trained on a synthetically generated dataset (~120 examples, 30 questions
+× 4 quality tiers across 6 categories). An LLM generates candidate-style answers at
+varying skill levels; each is assigned a target score with jitter. A human-validation
+subset (~25% of examples, scored blind by team members) calibrates synthetic labels
+against real judgment — corrections are applied where divergence exceeds 20 points.
+See the training script docstring for the full methodology.
+
+When `data/models/trained_scorer.joblib` exists, its score is returned as `ml_score`
+in `/api/scoring/run` and shown in the interview UI next to the primary score.
+No model → the signal is simply skipped.
 
 All mocked LLM/RAG tests run without any API key or model: `pytest tests/`.
 
@@ -216,9 +242,31 @@ acceptance checklist: **`docs/DEPLOYMENT.md`**.
 
 ## Data contracts
 
-All modules exchange five shapes defined in `app/core/models.py`:
-`InterviewSession`, `IntegrityFlag`, `CompetencyScore`, `ExplanationItem`, `FairnessFlag`.
-See `docs/INTERFACES.md` for the end-to-end pipeline and how team members build in parallel.
+All modules exchange shapes defined in `app/core/models.py`:
+`InterviewSession`, `IntegrityFlag`, `CompetencyScore`, `ExplanationItem`, `FairnessFlag`,
+`Candidate`, `JobPosting`, `ProcessedEmail`. See `docs/INTERFACES.md` for the end-to-end
+pipeline and how team members build in parallel.
+
+## Gmail integration (email-to-invite pipeline)
+
+Automatically screens incoming job applications and invites qualified candidates:
+
+1. **One-time setup**: Create a Google Cloud project, enable Gmail API, configure OAuth
+   consent screen, download `client_secret.json` to `data/`. See `docs/DEPLOYMENT.md`.
+2. **Connect**: In Settings → Email Integration, click "Connect Gmail" and complete the
+   OAuth flow. Tokens are stored in `data/settings.json` (gitignored).
+3. **Configure per job**: In the job posting form, set a **Gmail Application Label**
+   (e.g. "Applications/Senior-Backend") and a **Screening Threshold** (0-100, default 60).
+4. **Run**: Click "Check {Job Title}" on the Candidates page, or let the automatic poller
+   handle it (remote mode, every 10 minutes). The pipeline:
+   - Scans the Gmail label for emails with resume attachments
+   - Parses resumes and matches against the job description (reuses existing pipeline)
+   - Above threshold: creates candidate, generates invite code, sends invite email
+   - Below threshold: records candidate for transparency, does not invite
+   - Marks emails as processed to prevent re-processing
+
+A recruiter can still manually invite any candidate through the normal "Invite Candidate"
+flow, overriding the automated screening — this is an intentional human-in-the-loop safeguard.
 
 ## Roadmap
 
@@ -236,11 +284,15 @@ Completed since v0.4 (previously listed here as pending):
 - ✅ Trained classical ML scorer: RandomForest on transcript features, Leave-One-Out
   CV (pearson r / MAE / RMSE reported), surfaced as optional third signal — still on
   a placeholder dataset
+- ✅ Replaced placeholder ML-scorer dataset with LLM-generated quality-tier dataset
+  (~120 examples, human-validated subset with Pearson's r correlation reported)
+- ✅ Email-to-invite pipeline: Gmail OAuth integration, automatic resume screening
+  against job postings, threshold-based auto-invitation with email delivery, manual
+  trigger + background polling (remote mode), source/screening visibility on
+  candidates page, 6 mocked test cases (173 total tests passing)
 
 Still open:
 
-- Replace placeholder ML-scorer dataset with real labeled data (Kaggle-derived graded
-  answers or LLM-generated quality tiers) and re-train before quoting metrics
 - SHAP/LIME overlays for score explainability
 - Gaze-tracking signals (mediapipe face mesh) for the integrity module
 - Harden the central server for production: Postgres instead of SQLite, auth tokens on the API

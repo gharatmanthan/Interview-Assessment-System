@@ -10,16 +10,60 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        sidebar: "#1B1F2A",
-        "sidebar-hover": "#262B3A",
-        primary: "#5B5FEF",
-        "primary-dark": "#4548C9",
-        secondary: "#14B8A6",
-        warning: "#F59E0B",
-        danger: "#EF4444",
-        border: "#E5E7EB",
-        "border-custom": "#E5E7EB",
-        "bg-custom": "#F4F5F8",
+        background: "hsl(var(--background))",
+        foreground: "hsl(var(--foreground))",
+        primary: {
+          DEFAULT: "hsl(var(--primary))",
+          foreground: "hsl(var(--primary-foreground))",
+        },
+        secondary: {
+          DEFAULT: "hsl(var(--secondary))",
+          foreground: "hsl(var(--secondary-foreground))",
+        },
+        muted: {
+          DEFAULT: "hsl(var(--muted))",
+          foreground: "hsl(var(--muted-foreground))",
+        },
+        accent: {
+          DEFAULT: "hsl(var(--accent))",
+          foreground: "hsl(var(--accent-foreground))",
+        },
+        destructive: {
+          DEFAULT: "hsl(var(--destructive))",
+          foreground: "hsl(var(--destructive-foreground))",
+        },
+        success: {
+          DEFAULT: "hsl(var(--success))",
+          foreground: "hsl(var(--success-foreground))",
+        },
+        warning: {
+          DEFAULT: "hsl(var(--warning))",
+          foreground: "hsl(var(--warning-foreground))",
+        },
+        border: "hsl(var(--border))",
+        input: "hsl(var(--input))",
+        ring: "hsl(var(--ring))",
+        card: {
+          DEFAULT: "hsl(var(--card))",
+          foreground: "hsl(var(--card-foreground))",
+        },
+        popover: {
+          DEFAULT: "hsl(var(--popover))",
+          foreground: "hsl(var(--popover-foreground))",
+        },
+        "success-bg": "hsl(var(--success-bg))",
+        "success-text": "hsl(var(--success-text))",
+        "warning-bg": "hsl(var(--warning-bg))",
+        "warning-text": "hsl(var(--warning-text))",
+        "destructive-bg": "hsl(var(--destructive-bg))",
+        "destructive-text": "hsl(var(--destructive-text))",
+        sidebar: {
+          DEFAULT: "hsl(var(--sidebar))",
+          hover: "hsl(var(--sidebar-hover))",
+        },
+      },
+      fontFamily: {
+        sans: ["var(--font-inter)", "system-ui", "sans-serif"],
       },
       borderRadius: {
         lg: "var(--radius)",

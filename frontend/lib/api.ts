@@ -1,4 +1,4 @@
-import type { JobPosting, Candidate, InterviewSession, DashboardStats, CompetencyScore, Explanation, FairnessFlag, IntegrityFlag, CandidateReport, ComparisonRow, Settings, DeviceInfo, InviteValidation } from './types'
+import type { JobPosting, Candidate, InterviewSession, DashboardStats, CompetencyScore, Explanation, FairnessFlag, IntegrityFlag, CandidateReport, ComparisonRow, Settings, DeviceInfo, InviteValidation, GmailStatus, GmailConnectResult, EmailCheckResult, PollLogEntry } from './types'
 
 let cachedBaseUrl: string | null = null
 
@@ -180,4 +180,17 @@ export const api = {
     request<{ success: boolean }>('/api/candidate/complete-session', {
       method: 'POST', body: JSON.stringify({ session_id }),
     }),
+
+  // Gmail Integration
+  getGmailStatus: () => request<GmailStatus>('/api/settings/gmail/status'),
+  connectGmail: () => request<GmailConnectResult>('/api/settings/gmail/connect', { method: 'POST' }),
+  disconnectGmail: () => request<{ success: boolean; message: string }>('/api/settings/gmail/disconnect', { method: 'POST' }),
+
+  // Email Intake
+  checkEmailApplications: (job_id: string) =>
+    request<EmailCheckResult>('/api/email-intake/check', {
+      method: 'POST', body: JSON.stringify({ job_id }),
+    }),
+  getPollLogs: () =>
+    request<{ logs: PollLogEntry[] }>('/api/email-intake/poll-logs'),
 }

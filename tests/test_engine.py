@@ -200,6 +200,24 @@ class TestJdMatcher:
         assert result["missing_skills"] == ["docker", "kubernetes"]
         assert result["match_score"] == round(1 / 3 * 100, 1)
 
+    def test_match_score_is_0_to_100_not_0_to_1(self):
+        """match_score must be a plain percentage (0-100), never a 0-1 fraction.
+        Regression: frontend was doing score * 100 on a 0-100 value, causing
+        33.3% to display as 3330%."""
+        resume = {"skills": ["Python", "SQL", "AWS"]}
+        jd = "Needs python, sql, aws, docker, kubernetes, terraform, react, go, rust"
+        result = jd_matcher.match_resume_to_jd(resume, jd)
+        assert 0 < result["match_score"] < 100
+        # 3 matched (python, sql, aws) out of 6 recognized JD skills = 50.0
+        assert result["match_score"] == 50.0
+
+    def test_match_score_clamped_to_100(self):
+        """Even if a future code change produces > 100, the score must clamp."""
+        resume = {"skills": ["python", "sql", "docker", "kubernetes"]}
+        jd = "Needs python and sql."
+        result = jd_matcher.match_resume_to_jd(resume, jd)
+        assert result["match_score"] <= 100.0
+
 
 class TestResumeParser:
     def test_heuristic_parse_extracts_skills_experience_education(self):

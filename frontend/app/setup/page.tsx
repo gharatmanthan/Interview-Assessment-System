@@ -19,14 +19,6 @@ interface AppConfigState {
   needsSetup: boolean
 }
 
-/**
- * One-time connection setup.
- *
- * Candidates who received an installer with the central server baked in
- * never see this screen. It appears on first launch only when the app is
- * set to remote mode but no server address is known yet — or when someone
- * deliberately navigates here from Settings to change the target.
- */
 export default function SetupPage() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
@@ -47,9 +39,7 @@ export default function SetupPage() {
           setMode(cfg.backendMode)
           setServerUrl(cfg.remoteApiUrl || "")
         }
-      } catch {
-        // Outside Electron: nothing to configure
-      }
+      } catch {}
       setLoading(false)
     }
     init()
@@ -86,7 +76,6 @@ export default function SetupPage() {
       await (window as any).appConfig?.setConfig?.(update)
       toast.success("Connection settings saved")
       if ((window as any).appConfig?.restartWindow) {
-        // Recreate the window so the injected API base URL updates.
         await (window as any).appConfig.restartWindow()
       } else {
         router.push("/")
@@ -102,22 +91,22 @@ export default function SetupPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+      <div className="flex min-h-screen items-center justify-center bg-background">
         <Loader2 className="h-6 w-6 animate-spin text-primary" />
       </div>
     )
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
-      <Card className="w-full max-w-md rounded-2xl border bg-white shadow-lg">
+    <div className="flex min-h-screen items-center justify-center bg-background p-6">
+      <Card className="w-full max-w-md rounded-2xl shadow-lg">
         <CardContent className="p-8">
           <div className="mb-6 text-center">
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-white">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-primary-foreground">
               <Server className="h-6 w-6" />
             </div>
-            <h1 className="mt-4 text-2xl font-bold text-slate-900">Connect to Interview Server</h1>
-            <p className="mt-1 text-sm text-slate-500">
+            <h1 className="mt-4 text-2xl font-bold text-foreground">Connect to Interview Server</h1>
+            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
               One-time setup. Integrity checks always run locally on this machine regardless of choice.
             </p>
           </div>
@@ -126,16 +115,10 @@ export default function SetupPage() {
             <div className="space-y-2">
               <Label>Where is the interview data stored?</Label>
               <Select value={mode} onValueChange={setMode}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="remote">
-                    <span className="flex items-center gap-2"><Globe className="h-4 w-4" /> Remote interview server</span>
-                  </SelectItem>
-                  <SelectItem value="local">
-                    <span className="flex items-center gap-2"><Laptop className="h-4 w-4" /> This computer only</span>
-                  </SelectItem>
+                  <SelectItem value="remote"><span className="flex items-center gap-2"><Globe className="h-4 w-4" /> Remote interview server</span></SelectItem>
+                  <SelectItem value="local"><span className="flex items-center gap-2"><Laptop className="h-4 w-4" /> This computer only</span></SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -151,19 +134,15 @@ export default function SetupPage() {
                 />
                 <div className="flex items-center justify-between pt-1">
                   <Button type="button" variant="outline" size="sm" onClick={handleTest} disabled={!serverUrl.trim() || testing}>
-                    {testing ? (
-                      <><Loader2 className="mr-2 h-3 w-3 animate-spin" /> Testing...</>
-                    ) : (
-                      "Test connection"
-                    )}
+                    {testing ? (<><Loader2 className="mr-2 h-3 w-3 animate-spin" /> Testing...</>) : ("Test connection")}
                   </Button>
                   {testResult === "ok" && (
-                    <Badge className="bg-green-100 text-green-700 border-green-200">
+                    <Badge variant="success">
                       <CheckCircle className="h-3 w-3 mr-1" />Server reachable
                     </Badge>
                   )}
                   {testResult === "fail" && (
-                    <Badge className="bg-red-100 text-red-700 border-red-200">
+                    <Badge variant="destructive">
                       <AlertTriangle className="h-3 w-3 mr-1" />Unreachable
                     </Badge>
                   )}
@@ -171,16 +150,11 @@ export default function SetupPage() {
               </div>
             )}
 
-            <Button
-              className="w-full"
-              size="lg"
-              disabled={!canSave || saving}
-              onClick={handleSave}
-            >
+            <Button className="w-full" size="lg" disabled={!canSave || saving} onClick={handleSave}>
               {saving ? "Saving..." : "Save and Continue"}
             </Button>
 
-            <p className="text-center text-xs text-slate-400">
+            <p className="text-center text-xs text-muted-foreground">
               You can change this later in Settings → Connection
             </p>
           </div>

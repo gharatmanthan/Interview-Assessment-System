@@ -38,11 +38,6 @@ export default function CandidateCheckPage() {
     }
   }, [])
 
-  /**
-   * Runs port/process scans on THIS machine (via Electron's main process)
-   * and uploads any flags to the configured backend so they appear in the
-   * recruiter's Integrity Log. Works identically in local and remote mode.
-   */
   async function runLocalIntegrityCheck() {
     try {
       const sessionId = sessionStorage.getItem("session_id")
@@ -53,7 +48,6 @@ export default function CandidateCheckPage() {
       const flags = await scanAndReport(sessionId)
       setIntegrityFlags(flags)
     } catch {
-      // Scan failure must never block the interview
     } finally {
       setIntegrityDone(true)
     }
@@ -105,11 +99,11 @@ export default function CandidateCheckPage() {
   }
 
   return (
-    <Card className="rounded-2xl border bg-white shadow-lg">
+    <Card className="rounded-2xl shadow-lg">
       <CardContent className="p-8">
         <div className="text-center mb-6">
-          <h1 className="text-2xl font-bold text-slate-900">Device Check</h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <h1 className="text-2xl font-bold text-foreground">Device Check</h1>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
             Let's make sure your camera and microphone are working
           </p>
         </div>
@@ -133,33 +127,33 @@ export default function CandidateCheckPage() {
         </div>
 
         <div className="space-y-3 mb-6">
-          <div className="flex items-center justify-between rounded-lg border border-slate-100 p-3">
+          <div className="flex items-center justify-between rounded-lg border border-border p-3">
             <div className="flex items-center gap-3">
-              <Camera className="h-5 w-5 text-slate-600" />
-              <span className="text-sm font-medium text-slate-900">Camera</span>
+              <Camera className="h-5 w-5 text-muted-foreground" />
+              <span className="text-sm font-medium text-foreground">Camera</span>
             </div>
             {cameraOk === null ? (
               <Badge variant="outline"><Loader2 className="h-3 w-3 animate-spin mr-1" />Checking</Badge>
             ) : cameraOk ? (
-              <Badge className="bg-green-100 text-green-700 border-green-200">
+              <Badge variant="success">
                 <CheckCircle className="h-3 w-3 mr-1" />Working
               </Badge>
             ) : (
-              <Badge className="bg-red-100 text-red-700 border-red-200">
+              <Badge variant="destructive">
                 <AlertTriangle className="h-3 w-3 mr-1" />Not available
               </Badge>
             )}
           </div>
 
-          <div className="flex items-center justify-between rounded-lg border border-slate-100 p-3">
+          <div className="flex items-center justify-between rounded-lg border border-border p-3">
             <div className="flex items-center gap-3">
-              <Mic className="h-5 w-5 text-slate-600" />
-              <span className="text-sm font-medium text-slate-900">Microphone</span>
+              <Mic className="h-5 w-5 text-muted-foreground" />
+              <span className="text-sm font-medium text-foreground">Microphone</span>
             </div>
             <div className="flex items-center gap-2">
               {micOk && (
                 <div className="w-24">
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
                     <div
                       className="h-full rounded-full bg-primary transition-all duration-100"
                       style={{ width: `${micLevel * 100}%` }}
@@ -170,24 +164,24 @@ export default function CandidateCheckPage() {
               {micOk === null ? (
                 <Badge variant="outline"><Loader2 className="h-3 w-3 animate-spin mr-1" />Checking</Badge>
               ) : micOk ? (
-                <Badge className="bg-green-100 text-green-700 border-green-200">
+                <Badge variant="success">
                   <CheckCircle className="h-3 w-3 mr-1" />Working
                 </Badge>
               ) : (
-                <Badge className="bg-red-100 text-red-700 border-red-200">
+                <Badge variant="destructive">
                   <AlertTriangle className="h-3 w-3 mr-1" />Not available
                 </Badge>
               )}
             </div>
           </div>
 
-          <div className="rounded-lg border border-slate-100 p-3">
+          <div className="rounded-lg border border-border p-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <ShieldAlert className="h-5 w-5 text-slate-600" />
+                <ShieldAlert className="h-5 w-5 text-muted-foreground" />
                 <div>
-                  <span className="text-sm font-medium text-slate-900">Environment Integrity</span>
-                  <p className="text-xs text-slate-400">
+                  <span className="text-sm font-medium text-foreground">Environment Integrity</span>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
                     Checked locally on your machine for remote-access tools
                   </p>
                 </div>
@@ -195,19 +189,19 @@ export default function CandidateCheckPage() {
               {!integrityDone ? (
                 <Badge variant="outline"><Loader2 className="h-3 w-3 animate-spin mr-1" />Scanning</Badge>
               ) : integrityFlags.length === 0 ? (
-                <Badge className="bg-green-100 text-green-700 border-green-200">
+                <Badge variant="success">
                   <CheckCircle className="h-3 w-3 mr-1" />All clear
                 </Badge>
               ) : (
-                <Badge className="bg-red-100 text-red-700 border-red-200">
+                <Badge variant="destructive">
                   <AlertTriangle className="h-3 w-3 mr-1" />{integrityFlags.length} issue{integrityFlags.length > 1 ? "s" : ""} found
                 </Badge>
               )}
             </div>
             {integrityFlags.length > 0 && (
-              <ul className="mt-2 space-y-1 border-t border-slate-100 pt-2">
+              <ul className="mt-2 space-y-1 border-t border-border pt-2">
                 {integrityFlags.map((flag, i) => (
-                  <li key={i} className="flex items-start gap-2 text-xs text-red-600">
+                  <li key={i} className="flex items-start gap-2 text-xs text-destructive">
                     <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                     {flag.detail}
                   </li>

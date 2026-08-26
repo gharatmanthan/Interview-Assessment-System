@@ -16,7 +16,7 @@ export function TimerRing({ seconds, maxSeconds, size = 120 }: TimerRingProps) {
   const secs = seconds % 60
   const display = `${mins}:${secs.toString().padStart(2, "0")}`
 
-  const color = progress > 0.75 ? "#EF4444" : progress > 0.5 ? "#F59E0B" : "#5B5FEF"
+  const colorVar = progress > 0.75 ? "var(--destructive)" : progress > 0.5 ? "var(--warning)" : "var(--primary)"
 
   return (
     <div className="relative inline-flex items-center justify-center" style={{ width: size, height: size }}>
@@ -26,7 +26,7 @@ export function TimerRing({ seconds, maxSeconds, size = 120 }: TimerRingProps) {
           cy={size / 2}
           r={radius}
           fill="none"
-          stroke="#E5E7EB"
+          stroke="hsl(var(--border))"
           strokeWidth={6}
         />
         <circle
@@ -34,7 +34,7 @@ export function TimerRing({ seconds, maxSeconds, size = 120 }: TimerRingProps) {
           cy={size / 2}
           r={radius}
           fill="none"
-          stroke={color}
+          stroke={colorVar}
           strokeWidth={6}
           strokeLinecap="round"
           strokeDasharray={circumference}
@@ -43,8 +43,8 @@ export function TimerRing({ seconds, maxSeconds, size = 120 }: TimerRingProps) {
         />
       </svg>
       <div className="absolute flex flex-col items-center">
-        <span className="font-mono text-2xl font-semibold tabular-nums text-slate-900">{display}</span>
-        <span className="text-xs text-slate-500">remaining</span>
+        <span className="font-mono text-2xl font-semibold tabular-nums text-foreground">{display}</span>
+        <span className="text-xs leading-relaxed text-muted-foreground">remaining</span>
       </div>
     </div>
   )

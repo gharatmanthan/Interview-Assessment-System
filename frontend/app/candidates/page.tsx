@@ -18,14 +18,25 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import { Copy, RefreshCw, Upload, Trash2, Loader2, Users } from "lucide-react"
+import { Copy, RefreshCw, Upload, Trash2, Loader2, Users, Mail, AlertTriangle, Info } from "lucide-react"
 import { EmptyState } from "@/components/empty-state"
 
-const statusConfig: Record<string, { label: string; className: string }> = {
-  invited: { label: "Invited", className: "bg-blue-100 text-blue-700 border-blue-200" },
-  in_progress: { label: "In Progress", className: "bg-amber-100 text-amber-700 border-amber-200" },
-  completed: { label: "Completed", className: "bg-green-100 text-green-700 border-green-200" },
-  expired: { label: "Expired", className: "bg-gray-100 text-gray-600 border-gray-200" },
+const statusConfig: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" | "success" | "warning" }> = {
+  invited: { label: "Invited", variant: "default" },
+  in_progress: { label: "In Progress", variant: "warning" },
+  completed: { label: "Completed", variant: "success" },
+  expired: { label: "Expired", variant: "outline" },
+}
+
+const sourceConfig: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" | "success" | "warning" }> = {
+  manual: { label: "Manual", variant: "outline" },
+  email_auto: { label: "Auto (Email)", variant: "default" },
+}
+
+const screeningConfig: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" | "success" | "warning" }> = {
+  pending: { label: "Pending", variant: "outline" },
+  passed_threshold: { label: "Passed", variant: "success" },
+  below_threshold: { label: "Below Threshold", variant: "warning" },
 }
 
 export default function CandidatesPage() {
@@ -33,6 +44,7 @@ export default function CandidatesPage() {
   const [jobs, setJobs] = useState<JobPosting[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [gmailConnected, setGmailConnected] = useState(false)
 
   const [inviteOpen, setInviteOpen] = useState(false)
   const [inviteForm, setInviteForm] = useState({ name: "", email: "", job_id: "" })
@@ -44,6 +56,7 @@ export default function CandidatesPage() {
   const [revokeLoading, setRevokeLoading] = useState(false)
 
   const [uploadingId, setUploadingId] = useState<string | null>(null)
+  const [checkingJobs, setCheckingJobs] = useState<Record<string, boolean>>({})
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -52,6 +65,7 @@ export default function CandidatesPage() {
       const [cands, jobList] = await Promise.all([api.getCandidates(), api.getJobs()])
       setCandidates(cands)
       setJobs(jobList)
+      api.getGmailStatus().then((s) => setGmailConnected(s.connected)).catch(() => {})
     } catch (err: any) {
       setError(err.message || "Failed to load data")
       toast.error("Failed to load candidates")
@@ -141,27 +155,73 @@ export default function CandidatesPage() {
     }
   }
 
+  async function handleCheckApplications(jobId: string) {
+    setCheckingJobs((prev) => ({ ...prev, [jobId]: true }))
+    try {
+      const result = await api.checkEmailApplications(jobId)
+      toast.success(result.summary || "Check complete")
+      await fetchData()
+    } catch (err: any) {
+      toast.error(err.message || "Failed to check applications")
+    } finally {
+      setCheckingJobs((prev) => ({ ...prev, [jobId]: false }))
+    }
+  }
+
+  const jobsWithLabels = jobs.filter((j) => j.application_gmail_label)
+
   return (
-    <div className="min-h-screen bg-bg-custom p-8">
+    <div className="min-h-screen bg-background p-8">
       <div className="mx-auto max-w-6xl space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Candidates</h1>
-            <p className="text-sm text-slate-500">Manage interview candidates</p>
+            <h1 className="text-2xl font-bold text-foreground">Candidates</h1>
+            <p className="text-sm leading-relaxed text-muted-foreground">Manage interview candidates</p>
           </div>
-          <Button onClick={() => setInviteOpen(true)}>Invite Candidate</Button>
+          <div className="flex items-center gap-2">
+            {jobsWithLabels.length > 0 ? (
+              jobsWithLabels.map((job) => (
+                <Button
+                  key={job.job_id}
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleCheckApplications(job.job_id)}
+                  disabled={checkingJobs[job.job_id]}
+                >
+                  {checkingJobs[job.job_id] ? (
+                    <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+                  ) : (
+                    <Mail className="h-3 w-3 mr-1.5" />
+                  )}
+                  Check {job.title}
+                </Button>
+              ))
+            ) : gmailConnected ? (
+              <span className="text-xs text-muted-foreground">Set a Gmail label on a job posting to enable auto-check.</span>
+            ) : null}
+            <Button onClick={() => setInviteOpen(true)}>Invite Candidate</Button>
+          </div>
         </div>
 
-        <Card className="bg-white">
+        {!gmailConnected && (
+          <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
+            <Info className="h-4 w-4 mt-0.5 shrink-0" />
+            <p>
+              Gmail not connected. To auto-import candidates from email, go to <strong>Settings → Email Integration</strong> and connect Gmail. Then set a Gmail label on your job postings.
+            </p>
+          </div>
+        )}
+
+        <Card>
           <CardContent className="p-0">
             {loading ? (
               <div className="flex items-center justify-center p-12">
                 <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                <span className="ml-2 text-sm text-slate-500">Loading candidates...</span>
+                <span className="ml-2 text-sm text-muted-foreground">Loading candidates...</span>
               </div>
             ) : error ? (
               <div className="p-12 text-center">
-                <p className="text-sm text-red-500">{error}</p>
+                <p className="text-sm text-destructive">{error}</p>
                 <Button variant="outline" className="mt-4" onClick={fetchData}>Retry</Button>
               </div>
             ) : candidates.length === 0 ? (
@@ -178,6 +238,8 @@ export default function CandidatesPage() {
                     <TableHead>Email</TableHead>
                     <TableHead>Job</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead>Source</TableHead>
+                    <TableHead>Screening</TableHead>
                     <TableHead>Invite Code</TableHead>
                     <TableHead>Match Score</TableHead>
                     <TableHead>Skills</TableHead>
@@ -203,12 +265,11 @@ export default function CandidatesPage() {
           </CardContent>
         </Card>
 
-        {/* Resume Detail Cards */}
         {!loading && candidates.some((c) => c.resume_path) && (
           <div className="space-y-4">
-            <h2 className="text-lg font-semibold text-slate-900">Resume Matches</h2>
+            <h2 className="text-lg font-semibold text-foreground">Resume Matches</h2>
             {candidates.filter((c) => c.resume_path).map((c) => (
-              <Card key={c.candidate_id} className="bg-white">
+              <Card key={c.candidate_id}>
                 <CardHeader className="pb-3">
                   <CardTitle className="text-base">{c.name}</CardTitle>
                   <CardDescription>{getJobTitle(c.job_id)}</CardDescription>
@@ -216,24 +277,20 @@ export default function CandidatesPage() {
                 <CardContent className="space-y-3">
                   {c.matched_skills.length > 0 && (
                     <div>
-                      <p className="mb-1 text-xs font-medium text-slate-500">Matched Skills</p>
+                      <p className="mb-1 text-xs font-medium text-muted-foreground">Matched Skills</p>
                       <div className="flex flex-wrap gap-1.5">
                         {c.matched_skills.map((skill) => (
-                          <Badge key={skill} className="bg-green-100 text-green-700 border-green-200">
-                            {skill}
-                          </Badge>
+                          <Badge key={skill} variant="success">{skill}</Badge>
                         ))}
                       </div>
                     </div>
                   )}
                   {c.missing_skills.length > 0 && (
                     <div>
-                      <p className="mb-1 text-xs font-medium text-slate-500">Missing Skills</p>
+                      <p className="mb-1 text-xs font-medium text-muted-foreground">Missing Skills</p>
                       <div className="flex flex-wrap gap-1.5">
                         {c.missing_skills.map((skill) => (
-                          <Badge key={skill} variant="outline" className="border-red-200 text-red-600">
-                            {skill}
-                          </Badge>
+                          <Badge key={skill} variant="destructive">{skill}</Badge>
                         ))}
                       </div>
                     </div>
@@ -241,15 +298,15 @@ export default function CandidatesPage() {
                   {c.match_score != null && (
                     <div>
                       <div className="mb-1 flex items-center justify-between">
-                        <p className="text-xs font-medium text-slate-500">Match Score</p>
-                        <span className="text-xs font-semibold text-slate-700">
-                          {Math.round(c.match_score * 100)}%
+                        <p className="text-xs font-medium text-muted-foreground">Match Score</p>
+                        <span className="text-xs font-semibold text-foreground">
+                          {Math.round(c.match_score)}%
                         </span>
                       </div>
-                      <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                      <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
                         <div
                           className="h-full rounded-full bg-primary transition-all"
-                          style={{ width: `${Math.round(c.match_score * 100)}%` }}
+                          style={{ width: `${Math.min(100, Math.max(0, c.match_score))}%` }}
                         />
                       </div>
                     </div>
@@ -261,7 +318,6 @@ export default function CandidatesPage() {
         )}
       </div>
 
-      {/* Invite Dialog */}
       <Dialog open={inviteOpen} onOpenChange={(open) => {
         if (!open) {
           setInviteOpen(false)
@@ -278,7 +334,7 @@ export default function CandidatesPage() {
                 </DialogDescription>
               </DialogHeader>
               <div className="flex flex-col items-center py-6">
-                <p className="text-xs text-slate-500 mb-2">Invite Code</p>
+                <p className="text-xs text-muted-foreground mb-2">Invite Code</p>
                 <div className="flex items-center gap-3 rounded-xl border-2 border-dashed border-primary/30 bg-primary/5 px-8 py-4">
                   <span className="font-mono text-3xl font-bold tracking-widest text-primary">
                     {createdCandidate.invite_code}
@@ -358,7 +414,7 @@ export default function CandidatesPage() {
                     accept=".pdf,.docx,.txt"
                     onChange={(e) => setInviteResumeFile(e.target.files?.[0] ?? null)}
                   />
-                  <p className="text-xs text-slate-400">PDF, DOCX, or TXT — drives JD-match scoring</p>
+                  <p className="text-xs text-muted-foreground">PDF, DOCX, or TXT — drives JD-match scoring</p>
                 </div>
                 <DialogFooter>
                   <Button type="button" variant="outline" onClick={() => setInviteOpen(false)}>
@@ -374,7 +430,6 @@ export default function CandidatesPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Revoke Confirmation Dialog */}
       <Dialog open={!!revokeTarget} onOpenChange={(open) => { if (!open) setRevokeTarget(null) }}>
         <DialogContent>
           <DialogHeader>
@@ -416,7 +471,10 @@ function CandidateRow({
 }: CandidateRowProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const isUploading = uploadingId === c.candidate_id
-  const status = statusConfig[c.status] ?? { label: c.status, className: "bg-gray-100 text-gray-600" }
+  const status = statusConfig[c.status] ?? { label: c.status, variant: "outline" as const }
+  const source = sourceConfig[c.source] ?? { label: c.source, variant: "outline" as const }
+  const screening = screeningConfig[c.screening_status] ?? { label: c.screening_status, variant: "outline" as const }
+  const showEmailWarning = c.source === "email_auto" && c.screening_status === "passed_threshold" && !c.invite_email_sent
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -429,41 +487,51 @@ function CandidateRow({
   return (
     <TableRow>
       <TableCell className="font-medium">{c.name}</TableCell>
-      <TableCell className="text-slate-500">{c.email}</TableCell>
+      <TableCell className="text-muted-foreground">{c.email}</TableCell>
       <TableCell>{jobTitle}</TableCell>
       <TableCell>
-        <Badge variant="outline" className={status.className}>{status.label}</Badge>
+        <Badge variant={status.variant}>{status.label}</Badge>
       </TableCell>
       <TableCell>
-        <code className="rounded bg-slate-100 px-2 py-0.5 text-xs font-mono text-slate-700">
+        <Badge variant={source.variant}>{source.label}</Badge>
+      </TableCell>
+      <TableCell>
+        <div className="flex items-center gap-1.5">
+          <Badge variant={screening.variant}>{screening.label}</Badge>
+          {showEmailWarning && (
+            <span title="Invite email failed to send — use Resend"><AlertTriangle className="h-3.5 w-3.5 text-warning" /></span>
+          )}
+        </div>
+      </TableCell>
+      <TableCell>
+        <code className="rounded bg-muted px-2 py-0.5 text-xs font-mono text-foreground">
           {c.invite_code}
         </code>
       </TableCell>
       <TableCell>
         {c.match_score != null ? (
           <Badge
-            variant="outline"
-            className={
-              c.match_score >= 0.7
-                ? "bg-green-50 text-green-700 border-green-200"
-                : c.match_score >= 0.4
-                  ? "bg-amber-50 text-amber-700 border-amber-200"
-                  : "bg-red-50 text-red-700 border-red-200"
+            variant={
+              c.match_score >= 70
+                ? "success"
+                : c.match_score >= 40
+                  ? "warning"
+                  : "destructive"
             }
           >
-            {Math.round(c.match_score * 100)}%
+            {Math.round(c.match_score)}%
           </Badge>
         ) : (
-          <span className="text-slate-400">—</span>
+          <span className="text-muted-foreground">—</span>
         )}
       </TableCell>
       <TableCell>
         <div className="flex flex-wrap gap-1 max-w-[200px]">
           {c.matched_skills.slice(0, 2).map((s) => (
-            <Badge key={s} variant="secondary" className="text-[10px] bg-green-50 text-green-700 border-green-200">{s}</Badge>
+            <Badge key={s} variant="success" className="text-[10px]">{s}</Badge>
           ))}
           {c.missing_skills.slice(0, 2).map((s) => (
-            <Badge key={s} variant="outline" className="text-[10px] border-red-200 text-red-600">{s}</Badge>
+            <Badge key={s} variant="destructive" className="text-[10px]">{s}</Badge>
           ))}
           {(c.matched_skills.length + c.missing_skills.length) > 4 && (
             <Badge variant="outline" className="text-[10px]">+{c.matched_skills.length + c.missing_skills.length - 4}</Badge>
@@ -472,52 +540,17 @@ function CandidateRow({
       </TableCell>
       <TableCell>
         <div className="flex items-center justify-end gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            title="Copy invite code"
-            onClick={() => onCopyCode(c.invite_code)}
-          >
+          <Button variant="ghost" size="icon" className="h-8 w-8" title="Copy invite code" onClick={() => onCopyCode(c.invite_code)}>
             <Copy className="h-4 w-4" />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            title="Resend invite"
-            onClick={() => onResend(c)}
-          >
+          <Button variant="ghost" size="icon" className="h-8 w-8" title="Resend invite" onClick={() => onResend(c)}>
             <RefreshCw className="h-4 w-4" />
           </Button>
-          <input
-            type="file"
-            ref={fileInputRef}
-            className="hidden"
-            accept=".pdf,.docx,.txt"
-            onChange={handleFileChange}
-          />
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            title="Attach resume"
-            disabled={isUploading}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            {isUploading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Upload className="h-4 w-4" />
-            )}
+          <input type="file" ref={fileInputRef} className="hidden" accept=".pdf,.docx,.txt" onChange={handleFileChange} />
+          <Button variant="ghost" size="icon" className="h-8 w-8" title="Attach resume" disabled={isUploading} onClick={() => fileInputRef.current?.click()}>
+            {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 text-red-500 hover:text-red-600"
-            title="Revoke candidate"
-            onClick={() => onRevoke(c)}
-          >
+          <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" title="Revoke candidate" onClick={() => onRevoke(c)}>
             <Trash2 className="h-4 w-4" />
           </Button>
         </div>

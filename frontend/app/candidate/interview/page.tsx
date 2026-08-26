@@ -20,12 +20,7 @@ const QUESTIONS = [
 
 const CATEGORIES = ["behavioral", "technical", "dsa", "system_design", "communication"]
 
-// Re-run the LOCAL environment scan periodically during the interview so
-// remote-access tools started mid-interview are still caught.
 const INTEGRITY_POLL_MS = 30000
-
-// Push a preview frame to the backend every ~1.5s so the recruiter's Live
-// Monitor shows the feed. Low-stakes: failures are swallowed, next tick tries.
 const LIVE_FRAME_INTERVAL_MS = 1500
 
 export default function CandidateInterviewPage() {
@@ -74,12 +69,10 @@ export default function CandidateInterviewPage() {
       } catch {
         setCameraActive(false)
       }
-      // Local-only scan loop; new flags are uploaded to the configured backend.
       pollRef.current = setInterval(() => {
         pollIntegrityOnce(sessionId!).catch(() => {})
       }, INTEGRITY_POLL_MS)
 
-      // Live-monitor preview feed for the recruiter's dashboard.
       frameTimerRef.current = setInterval(() => {
         pushLiveFrame(sessionId!).catch(() => {})
       }, LIVE_FRAME_INTERVAL_MS)
@@ -91,10 +84,6 @@ export default function CandidateInterviewPage() {
     }
   }, [])
 
-  /**
-   * Grabs the current video frame via an off-screen canvas and uploads it.
-   * Strictly fire-and-forget: a missed frame is fine, the next tick re-sends.
-   */
   async function pushLiveFrame(sid: string) {
     const video = videoRef.current
     if (!video || video.readyState < 2 || !video.videoWidth) return
@@ -108,10 +97,6 @@ export default function CandidateInterviewPage() {
     if (blob) await api.uploadLiveFrame(sid, blob)
   }
 
-  /**
-   * Periodic LOCAL re-scan. Only newly-seen findings are uploaded so the
-   * shared Integrity Log is not spammed with duplicates every 30s.
-   */
   async function pollIntegrityOnce(sid: string) {
     const result = await runLocalScan()
     if (!result) return
@@ -163,7 +148,6 @@ export default function CandidateInterviewPage() {
       recorder.start(5000)
       recorderRef.current = recorder
     } catch {
-      // Recording is best-effort; interview continues without it
     }
   }
 
@@ -182,7 +166,6 @@ export default function CandidateInterviewPage() {
     })
   }
 
-  /** Uploads the locally recorded capture to the backend (local sidecar or central server). */
   async function uploadRecording() {
     try {
       const blob = await stopRecording()
@@ -212,8 +195,6 @@ export default function CandidateInterviewPage() {
         setCurrentQuestion((q) => q + 1)
         setTimeLeft(300)
       } else {
-        // Interview over: stop the live feed before completing so the
-        // backend's frame cleanup wins the race.
         if (frameTimerRef.current) clearInterval(frameTimerRef.current)
         frameTimerRef.current = null
         await api.completeCandidateSession(sessionId)
@@ -230,20 +211,20 @@ export default function CandidateInterviewPage() {
   if (!candidate || !job) return null
 
   return (
-    <div className="-mx-4 min-h-screen bg-slate-50 p-4 md:-mx-8 md:p-8">
+    <div className="-mx-4 min-h-screen bg-background p-4 md:-mx-8 md:p-8">
       <div className="mx-auto max-w-4xl space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-lg font-bold text-slate-900">{job.title}</h1>
-            <p className="text-sm text-slate-500">
+            <h1 className="text-lg font-bold text-foreground">{job.title}</h1>
+            <p className="text-sm leading-relaxed text-muted-foreground">
               Question {currentQuestion + 1} of {QUESTIONS.length}
             </p>
           </div>
           <div className="flex items-center gap-3">
             {recording && (
               <div className="flex items-center gap-2">
-                <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
-                <span className="text-xs text-slate-500">Recording</span>
+                <span className="h-2 w-2 animate-pulse rounded-full bg-destructive" />
+                <span className="text-xs text-muted-foreground">Recording</span>
               </div>
             )}
           </div>
@@ -259,16 +240,16 @@ export default function CandidateInterviewPage() {
               className={`h-full w-full object-cover ${cameraActive ? "" : "hidden"}`}
             />
             {!cameraActive && (
-              <div className="flex h-full items-center justify-center bg-slate-900 text-white/40">
+              <div className="flex h-full items-center justify-center bg-foreground text-white/40">
                 <Video className="h-6 w-6" />
               </div>
             )}
           </div>
         </div>
 
-        <Card className="rounded-2xl border bg-white shadow-sm">
+        <Card className="rounded-2xl shadow-sm">
           <CardContent className="p-8">
-            <p className="text-lg leading-relaxed text-slate-900">
+            <p className="text-lg leading-relaxed text-foreground">
               {QUESTIONS[currentQuestion]}
             </p>
           </CardContent>
@@ -278,10 +259,10 @@ export default function CandidateInterviewPage() {
           <TimerRing seconds={timeLeft} maxSeconds={300} size={140} />
         </div>
 
-        <Card className="rounded-2xl border bg-white shadow-sm">
+        <Card className="rounded-2xl shadow-sm">
           <CardContent className="p-6">
             <textarea
-              className="h-40 w-full rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+              className="h-40 w-full rounded-lg border border-input bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-primary focus:ring-2 focus:ring-ring/20"
               placeholder="Type your answer here..."
               value={transcript}
               onChange={(e) => setTranscript(e.target.value)}

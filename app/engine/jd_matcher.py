@@ -40,6 +40,7 @@ def _heuristic_match(resume_data: dict, job_description: str) -> dict:
     matched = sorted(resume_skills & jd_skills)
     missing = sorted(jd_skills - resume_skills)
     match_score = round(len(matched) / len(jd_skills) * 100, 1)
+    match_score = max(0.0, min(100.0, match_score))
 
     return {"match_score": match_score, "matched_skills": matched, "missing_skills": missing,
             "matched_by": "keyword_overlap",

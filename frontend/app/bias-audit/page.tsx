@@ -33,47 +33,45 @@ export default function BiasAuditPage() {
     : "0"
 
   return (
-    <div className="min-h-screen bg-slate-50 p-8">
+    <div className="min-h-screen bg-background p-8">
       <div className="mx-auto max-w-7xl">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-slate-900">Bias Audit</h1>
-          <p className="mt-1 text-slate-500">Fairness analysis of scoring</p>
+          <h1 className="text-3xl font-bold text-foreground">Bias Audit</h1>
+          <p className="mt-1 leading-relaxed text-muted-foreground">Fairness analysis of scoring</p>
         </div>
 
         {loading ? (
-          <div className="py-16 text-center text-sm text-slate-400">Loading...</div>
+          <div className="py-16 text-center text-sm text-muted-foreground">Loading...</div>
         ) : (
           <>
-            {/* Summary Stats */}
             <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
               <Card>
                 <CardContent className="p-6 text-center">
-                  <div className="text-3xl font-bold text-slate-900">{flags.length}</div>
-                  <div className="mt-1 text-sm text-slate-500">Total Flags</div>
+                  <div className="text-3xl font-bold text-foreground">{flags.length}</div>
+                  <div className="mt-1 text-sm leading-relaxed text-muted-foreground">Total Flags</div>
                 </CardContent>
               </Card>
               <Card>
                 <CardContent className="p-6 text-center">
-                  <div className="text-3xl font-bold text-red-600">{flagged.length}</div>
-                  <div className="mt-1 text-sm text-slate-500">Flagged (Δ ≥ 5)</div>
+                  <div className="text-3xl font-bold text-destructive-text">{flagged.length}</div>
+                  <div className="mt-1 text-sm leading-relaxed text-muted-foreground">Flagged (Δ ≥ 5)</div>
                 </CardContent>
               </Card>
               <Card>
                 <CardContent className="p-6 text-center">
-                  <div className="text-3xl font-bold text-amber-600">{avgDelta}</div>
-                  <div className="mt-1 text-sm text-slate-500">Average Delta</div>
+                  <div className="text-3xl font-bold text-warning-text">{avgDelta}</div>
+                  <div className="mt-1 text-sm leading-relaxed text-muted-foreground">Average Delta</div>
                 </CardContent>
               </Card>
             </div>
 
-            {/* Flags Table */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Bias Flags</CardTitle>
               </CardHeader>
               <CardContent>
                 {flags.length === 0 ? (
-                  <div className="py-12 text-center text-sm text-slate-400">No bias flags detected</div>
+                  <div className="py-12 text-center text-sm text-muted-foreground">No bias flags detected</div>
                 ) : (
                   <Table>
                     <TableHeader>
@@ -89,16 +87,16 @@ export default function BiasAuditPage() {
                       {flags.map((f, i) => {
                         const delta = f.score_delta
                         const absDelta = Math.abs(delta)
-                        let deltaColor = "text-emerald-600"
-                        if (absDelta > 5) deltaColor = "text-red-600"
-                        else if (absDelta >= 3) deltaColor = "text-amber-600"
+                        let deltaColor = "text-success-text"
+                        if (absDelta > 5) deltaColor = "text-destructive-text"
+                        else if (absDelta >= 3) deltaColor = "text-warning-text"
 
                         const session = sessionMap[f.session_id]
 
                         return (
                           <TableRow key={i}>
                             <TableCell className="font-medium">{session?.candidate_name ?? "—"}</TableCell>
-                            <TableCell className="text-slate-500">{session?.job_title ?? "—"}</TableCell>
+                            <TableCell className="text-muted-foreground">{session?.job_title ?? "—"}</TableCell>
                             <TableCell className="font-mono text-xs">{f.question_id}</TableCell>
                             <TableCell className="text-right">
                               <span className={`inline-flex items-center gap-1 font-semibold ${deltaColor}`}>
@@ -106,7 +104,7 @@ export default function BiasAuditPage() {
                                 {delta > 0 ? "+" : ""}{delta}
                               </span>
                             </TableCell>
-                            <TableCell className="max-w-xs text-xs text-slate-600">{f.note}</TableCell>
+                            <TableCell className="max-w-xs text-xs leading-relaxed text-muted-foreground">{f.note}</TableCell>
                           </TableRow>
                         )
                       })}

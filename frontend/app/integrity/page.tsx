@@ -16,9 +16,9 @@ import {
 } from "@/components/ui/table"
 
 function severityBadge(severity: string) {
-  if (severity === "high") return <Badge className="bg-red-100 text-red-700 border-red-200">high</Badge>
-  if (severity === "medium") return <Badge className="bg-amber-100 text-amber-700 border-amber-200">medium</Badge>
-  return <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">low</Badge>
+  if (severity === "high") return <Badge variant="destructive">high</Badge>
+  if (severity === "medium") return <Badge variant="warning">medium</Badge>
+  return <Badge variant="success">low</Badge>
 }
 
 function formatFlagType(s: string): string {
@@ -41,53 +41,51 @@ export default function IntegrityPage() {
   const uniqueSessions = new Set(flags.map((f) => f.session_id)).size
 
   return (
-    <div className="min-h-screen bg-slate-50 p-8">
+    <div className="min-h-screen bg-background p-8">
       <div className="mx-auto max-w-7xl">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-slate-900">Integrity Log</h1>
-          <p className="mt-1 text-slate-500">Security and cheating detection</p>
+          <h1 className="text-3xl font-bold text-foreground">Integrity Log</h1>
+          <p className="mt-1 leading-relaxed text-muted-foreground">Security and cheating detection</p>
         </div>
 
         {loading ? (
-          <div className="py-16 text-center text-sm text-slate-400">Loading...</div>
+          <div className="py-16 text-center text-sm text-muted-foreground">Loading...</div>
         ) : (
           <>
-            {/* Summary Stats */}
             <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-4">
               <Card>
                 <CardContent className="p-6 text-center">
-                  <div className="text-3xl font-bold text-slate-900">{flags.length}</div>
-                  <div className="mt-1 text-sm text-slate-500">Total Flags</div>
+                  <div className="text-3xl font-bold text-foreground">{flags.length}</div>
+                  <div className="mt-1 text-sm leading-relaxed text-muted-foreground">Total Flags</div>
                 </CardContent>
               </Card>
               <Card>
                 <CardContent className="p-6 text-center">
-                  <div className="text-3xl font-bold text-red-600">{highCount}</div>
-                  <div className="mt-1 text-sm text-slate-500">High Severity</div>
+                  <div className="text-3xl font-bold text-destructive-text">{highCount}</div>
+                  <div className="mt-1 text-sm leading-relaxed text-muted-foreground">High Severity</div>
                 </CardContent>
               </Card>
               <Card>
                 <CardContent className="p-6 text-center">
-                  <div className="text-3xl font-bold text-amber-600">{mediumCount}</div>
-                  <div className="mt-1 text-sm text-slate-500">Medium Severity</div>
+                  <div className="text-3xl font-bold text-warning-text">{mediumCount}</div>
+                  <div className="mt-1 text-sm leading-relaxed text-muted-foreground">Medium Severity</div>
                 </CardContent>
               </Card>
               <Card>
                 <CardContent className="p-6 text-center">
-                  <div className="text-3xl font-bold text-slate-900">{uniqueSessions}</div>
-                  <div className="mt-1 text-sm text-slate-500">Sessions Affected</div>
+                  <div className="text-3xl font-bold text-foreground">{uniqueSessions}</div>
+                  <div className="mt-1 text-sm leading-relaxed text-muted-foreground">Sessions Affected</div>
                 </CardContent>
               </Card>
             </div>
 
-            {/* Flags Table */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Integrity Flags</CardTitle>
               </CardHeader>
               <CardContent>
                 {flags.length === 0 ? (
-                  <div className="py-12 text-center text-sm text-slate-400">
+                  <div className="py-12 text-center text-sm text-muted-foreground">
                     No integrity flags recorded
                   </div>
                 ) : (
@@ -106,11 +104,11 @@ export default function IntegrityPage() {
                       {flags.map((f, i) => (
                         <TableRow key={f.id ?? i}>
                           <TableCell className="font-medium">{f.candidate_name ?? "—"}</TableCell>
-                          <TableCell className="text-slate-500">{f.job_title ?? "—"}</TableCell>
+                          <TableCell className="text-muted-foreground">{f.job_title ?? "—"}</TableCell>
                           <TableCell>{formatFlagType(f.flag_type)}</TableCell>
-                          <TableCell className="max-w-xs text-xs text-slate-600">{f.detail}</TableCell>
+                          <TableCell className="max-w-xs text-xs leading-relaxed text-muted-foreground">{f.detail}</TableCell>
                           <TableCell>{severityBadge(f.severity)}</TableCell>
-                          <TableCell className="text-xs text-slate-500">{formatDate(f.timestamp)}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{formatDate(f.timestamp)}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>

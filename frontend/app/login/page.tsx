@@ -57,14 +57,14 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-bg-custom px-4">
-      <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-lg">
+    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+      <div className="w-full max-w-md rounded-2xl bg-card p-8 shadow-lg border border-border">
         <div className="mb-8 text-center">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-white font-bold text-xl">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-primary-foreground font-bold text-xl">
             IQ
           </div>
-          <h1 className="mt-4 text-2xl font-bold text-slate-900">InterviewIQ</h1>
-          <p className="mt-1 text-sm text-slate-500">AI-Powered Interview Assessment</p>
+          <h1 className="mt-4 text-2xl font-bold text-foreground">InterviewIQ</h1>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">AI-Powered Interview Assessment</p>
         </div>
 
         <Tabs defaultValue="signin" onValueChange={() => { setSignInError(""); setSignUpError("") }}>
@@ -76,7 +76,7 @@ export default function LoginPage() {
           <TabsContent value="signin">
             <form onSubmit={handleSignIn} className="space-y-4">
               <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">
+                <label className="mb-1 block text-sm font-medium text-foreground">
                   Username
                 </label>
                 <input
@@ -84,12 +84,12 @@ export default function LoginPage() {
                   required
                   value={signIn.username}
                   onChange={(e) => setSignIn({ ...signIn, username: e.target.value })}
-                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition-colors placeholder:text-slate-400 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-ring/20"
                   placeholder="Enter your username"
                 />
               </div>
               <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">
+                <label className="mb-1 block text-sm font-medium text-foreground">
                   Password
                 </label>
                 <input
@@ -97,17 +97,17 @@ export default function LoginPage() {
                   required
                   value={signIn.password}
                   onChange={(e) => setSignIn({ ...signIn, password: e.target.value })}
-                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition-colors placeholder:text-slate-400 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-ring/20"
                   placeholder="Enter your password"
                 />
                 {signInError && (
-                  <p className="text-sm text-red-500">{signInError}</p>
+                  <p className="text-sm text-destructive">{signInError}</p>
                 )}
               </div>
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full rounded-lg bg-primary py-2.5 text-sm font-semibold text-white transition-colors hover:bg-primary-dark disabled:opacity-50"
+                className="w-full rounded-lg bg-primary py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
               >
                 {loading ? "Signing in..." : "Sign In"}
               </button>
@@ -117,7 +117,7 @@ export default function LoginPage() {
           <TabsContent value="signup">
             <form onSubmit={handleSignUp} className="space-y-4">
               <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">
+                <label className="mb-1 block text-sm font-medium text-foreground">
                   Full Name
                 </label>
                 <input
@@ -125,12 +125,12 @@ export default function LoginPage() {
                   required
                   value={signUp.full_name}
                   onChange={(e) => setSignUp({ ...signUp, full_name: e.target.value })}
-                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition-colors placeholder:text-slate-400 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-ring/20"
                   placeholder="Enter your full name"
                 />
               </div>
               <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">
+                <label className="mb-1 block text-sm font-medium text-foreground">
                   Username
                 </label>
                 <input
@@ -138,12 +138,12 @@ export default function LoginPage() {
                   required
                   value={signUp.username}
                   onChange={(e) => setSignUp({ ...signUp, username: e.target.value })}
-                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition-colors placeholder:text-slate-400 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-ring/20"
                   placeholder="Choose a username"
                 />
               </div>
               <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">
+                <label className="mb-1 block text-sm font-medium text-foreground">
                   Password
                 </label>
                 <input
@@ -151,17 +151,17 @@ export default function LoginPage() {
                   required
                   value={signUp.password}
                   onChange={(e) => setSignUp({ ...signUp, password: e.target.value })}
-                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition-colors placeholder:text-slate-400 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-ring/20"
                   placeholder="Create a password"
                 />
                 {signUpError && (
-                  <p className="text-sm text-red-500">{signUpError}</p>
+                  <p className="text-sm text-destructive">{signUpError}</p>
                 )}
               </div>
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full rounded-lg bg-primary py-2.5 text-sm font-semibold text-white transition-colors hover:bg-primary-dark disabled:opacity-50"
+                className="w-full rounded-lg bg-primary py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
               >
                 {loading ? "Creating account..." : "Sign Up"}
               </button>

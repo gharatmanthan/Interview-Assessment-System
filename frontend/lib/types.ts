@@ -16,6 +16,8 @@ export interface JobPosting {
   adaptive_difficulty: boolean
   competency_weights: Record<string, number>
   created_at?: string
+  screening_threshold: number
+  application_gmail_label: string
 }
 
 export interface Candidate {
@@ -34,6 +36,9 @@ export interface Candidate {
   matched_skills: string[]
   missing_skills: string[]
   job_title?: string
+  source: string
+  screening_status: string
+  invite_email_sent: boolean
 }
 
 export interface InterviewSession {
@@ -111,6 +116,8 @@ export interface Settings {
   llm_provider: string
   llm_api_key: string
   export_dir: string
+  gmail_connected: boolean
+  gmail_user: string
 }
 
 export interface DeviceInfo {
@@ -124,4 +131,33 @@ export interface InviteValidation {
   candidate?: Candidate
   job?: JobPosting
   message?: string
+}
+
+export interface GmailStatus {
+  connected: boolean
+  email: string
+}
+
+export interface GmailConnectResult {
+  success: boolean
+  email: string
+  message: string
+}
+
+export interface EmailCheckResult {
+  results: Record<string, any>[]
+  summary: string
+}
+
+export interface PollLogEntry {
+  id: number
+  run_at: string
+  job_id: string
+  job_title: string
+  total_checked: number
+  invited: number
+  below_threshold: number
+  skipped: number
+  failed: number
+  mode: string
 }

@@ -43,7 +43,7 @@ PROJECT_ENV_PATH = PROJECT_ROOT / ".env"
 load_dotenv(PROJECT_ENV_PATH)
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama-3.1-8b-instant"
+GROQ_MODEL = "qwen/qwen3.6-27b"
 
 # An interview flow cannot hang indefinitely; 15s covers slow generations
 # without freezing the scoring pipeline.
