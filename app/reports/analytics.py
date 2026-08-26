@@ -20,10 +20,14 @@ def get_dashboard_stats() -> dict:
     Consumed by: app/ui/pages/dashboard_page.py
     """
     sessions = db.get_all_sessions()
-    # TODO: aggregate real scores/flags once Member A/B start writing data
+    scores = []
+    for session in sessions:
+        scores.extend(db.get_session_scores(session["session_id"]))
     return {
         "interviews_conducted": len(sessions),
-        "avg_explainability_score": 0.0,
-        "bias_flags_raised": 0,
-        "integrity_flags": 0,
+        "avg_explainability_score": round(
+            sum(score["score"] for score in scores) / len(scores), 1
+        ) if scores else 0.0,
+        "bias_flags_raised": len(db.get_all_fairness_flags()),
+        "integrity_flags": len(db.get_all_integrity_flags()),
     }

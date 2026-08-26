@@ -7,9 +7,10 @@ combined with **integrity / AI-assisted-answer detection** for automated intervi
 
 What works right now:
 - Full desktop app shell (sidebar navigation, 6 sections)
+- Candidate sign-in before accessing the candidate dashboard
 - Live webcam preview on the "New Interview" screen (via OpenCV)
 - Question flow (next/previous navigation through question bank)
-- Placeholder transcript box (ready to wire up to Whisper)
+- Microphone recording with local Whisper speech-to-text in the transcript panel
 - Dashboard with stat cards (currently static — wire to real data next)
 - Placeholder pages for Reports, Bias Audit, and Integrity Log describing exactly what
   each will contain once the backend pipelines are built
@@ -49,6 +50,8 @@ python -m app.main
 
 Requires a webcam for the interview screen to show a live preview (click "Start Camera").
 If no webcam is available it will show an error message but the rest of the app still works.
+
+The local demo candidate account is `candidate01` with password `interview123`.
 
 ## Architecture (planned modules)
 

@@ -4,6 +4,7 @@ from PySide6.QtCore import Signal, Qt
 
 NAV_ITEMS = [
     ("dashboard", "🏠  Dashboard"),
+    ("job_posting", "📝  Create Job Posting"),
     ("interview", "🎙  New Interview"),
     ("reports", "📊  Candidate Reports"),
     ("bias_audit", "⚖️  Bias Audit"),
@@ -15,7 +16,7 @@ NAV_ITEMS = [
 class Sidebar(QWidget):
     navigate = Signal(str)
 
-    def __init__(self):
+    def __init__(self, logged_in_as: str = None, user_role: str = "candidate"):
         super().__init__()
         self.setObjectName("Sidebar")
         self.setFixedWidth(230)
@@ -24,8 +25,8 @@ class Sidebar(QWidget):
         self.active_key = "dashboard"
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 24, 16, 24)
-        layout.setSpacing(6)
+        layout.setContentsMargins(18, 28, 18, 24)
+        layout.setSpacing(7)
 
         title = QLabel("InterviewIQ")
         title.setObjectName("BrandTitle")
@@ -33,9 +34,12 @@ class Sidebar(QWidget):
         subtitle.setObjectName("BrandSubtitle")
         layout.addWidget(title)
         layout.addWidget(subtitle)
-        layout.addSpacing(24)
+        layout.addSpacing(28)
 
-        for key, label in NAV_ITEMS:
+        visible_items = NAV_ITEMS if user_role == "interviewer" else [
+            item for item in NAV_ITEMS if item[0] in {"dashboard", "interview", "settings"}
+        ]
+        for key, label in visible_items:
             btn = QPushButton(label)
             btn.setObjectName("NavButton")
             btn.setCursor(Qt.PointingHandCursor)

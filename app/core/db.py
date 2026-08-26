@@ -67,7 +67,42 @@ def init_db():
         score_delta REAL,
         note TEXT
     );
+    CREATE TABLE IF NOT EXISTS job_postings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE TABLE IF NOT EXISTS candidate_accounts (
+        candidate_id TEXT PRIMARY KEY,
+        password TEXT NOT NULL,
+        full_name TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS candidate_profiles (
+        candidate_id TEXT PRIMARY KEY,
+        resume_path TEXT NOT NULL,
+        profile_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (candidate_id) REFERENCES candidate_accounts(candidate_id)
+    );
+    CREATE TABLE IF NOT EXISTS live_interviews (
+        session_id TEXT PRIMARY KEY,
+        candidate_id TEXT NOT NULL,
+        candidate_name TEXT NOT NULL,
+        question TEXT NOT NULL,
+        question_index INTEGER NOT NULL DEFAULT 0,
+        transcript TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'live',
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
     """)
+    conn.execute(
+        """INSERT OR IGNORE INTO candidate_accounts
+        (candidate_id, password, full_name)
+        VALUES (?, ?, ?)""",
+        ("candidate01", "interview123", "Demo Candidate"),
+    )
     conn.commit()
     conn.close()
 
@@ -87,6 +122,51 @@ def save_session(session):
     )
     conn.commit()
     conn.close()
+
+
+def authenticate_candidate(candidate_id, password):
+    conn = get_connection()
+    account = conn.execute(
+        """SELECT candidate_id, full_name FROM candidate_accounts
+        WHERE candidate_id = ? AND password = ?""",
+        (candidate_id, password),
+    ).fetchone()
+    conn.close()
+    return dict(account) if account else None
+
+
+def get_candidate_accounts():
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT candidate_id, full_name FROM candidate_accounts ORDER BY full_name"
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def save_candidate_profile(candidate_id: str, resume_path: str, profile_json: str):
+    conn = get_connection()
+    conn.execute(
+        """INSERT OR REPLACE INTO candidate_profiles
+        (candidate_id, resume_path, profile_json, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)""",
+        (candidate_id, resume_path, profile_json),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_candidate_profile(candidate_id: str):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM candidate_profiles WHERE candidate_id = ?", (candidate_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    profile = dict(row)
+    profile["profile"] = json.loads(profile.pop("profile_json"))
+    return profile
 
 
 def save_integrity_flag(flag):
@@ -145,6 +225,79 @@ def get_all_sessions():
     return [dict(r) for r in rows]
 
 
+def start_live_interview(session_id, candidate_id, candidate_name, question, question_index=0):
+    conn = get_connection()
+    conn.execute(
+        """INSERT OR REPLACE INTO live_interviews
+        (session_id, candidate_id, candidate_name, question, question_index,
+         transcript, status, updated_at)
+        VALUES (?, ?, ?, ?, ?, '', 'live', CURRENT_TIMESTAMP)""",
+        (session_id, candidate_id, candidate_name, question, question_index),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_live_interview(session_id, **fields):
+    allowed = {"question", "question_index", "transcript", "status"}
+    changes = {key: value for key, value in fields.items() if key in allowed}
+    if not changes:
+        return
+    assignments = ", ".join(f"{key} = ?" for key in changes)
+    values = list(changes.values()) + [session_id]
+    conn = get_connection()
+    conn.execute(
+        f"UPDATE live_interviews SET {assignments}, updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
+        values,
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_live_interviews():
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM live_interviews WHERE status = 'live' ORDER BY updated_at DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_live_interview(session_id):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM live_interviews WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def save_job_posting(title: str, description: str):
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO job_postings (title, description, created_at, is_active) VALUES (?, ?, datetime('now'), 1)",
+        (title, description),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_active_job_postings():
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT id, title, description, created_at FROM job_postings WHERE is_active = 1 ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def deactivate_job_posting(job_id: int):
+    conn = get_connection()
+    conn.execute("UPDATE job_postings SET is_active = 0 WHERE id = ?", (job_id,))
+    conn.commit()
+    conn.close()
+
+
 def get_session_scores(session_id):
     conn = get_connection()
     rows = conn.execute(
@@ -161,3 +314,31 @@ def get_session_flags(session_id):
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def get_session_explanations(session_id):
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM explanations WHERE session_id = ?", (session_id,)
+    ).fetchall()
+    conn.close()
+    explanations = []
+    for row in rows:
+        item = dict(row)
+        item["supporting_phrases"] = json.loads(item["supporting_phrases"] or "[]")
+        explanations.append(item)
+    return explanations
+
+
+def get_all_integrity_flags():
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM integrity_flags ORDER BY timestamp DESC").fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_all_fairness_flags():
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM fairness_flags ORDER BY id DESC").fetchall()
+    conn.close()
+    return [dict(row) for row in rows]

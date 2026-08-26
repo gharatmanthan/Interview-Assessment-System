@@ -13,13 +13,24 @@ TODO (Member A):
   phone detection via mediapipe/OpenCV) into a list of IntegrityFlag
 """
 import socket
+import psutil
+
 from app.core.models import IntegrityFlag
+from app.candidate.face_recognition import detect_faces
+from app.utils.port_scanner import get_unauthorized_devices
 
 REMOTE_ACCESS_PORTS = {
     3389: "RDP",
     5900: "VNC",
     5938: "TeamViewer",
     7070: "AnyDesk",
+}
+SUSPICIOUS_PROCESSES = {
+    "teamviewer": "TeamViewer",
+    "anydesk": "AnyDesk",
+    "vnc": "VNC",
+    "rustdesk": "RustDesk",
+    "parsec": "Parsec",
 }
 
 
@@ -37,10 +48,28 @@ def port_scan(timeout=0.3) -> list:
 
 
 def process_scan() -> list:
-    """TODO: use psutil to check for teamviewer.exe, anydesk.exe, vncserver, etc.
-    (add psutil to requirements.txt when you start this)
-    """
-    raise NotImplementedError
+    """Return known remote-access processes currently running."""
+    found = []
+    for process in psutil.process_iter(["name"]):
+        try:
+            name = (process.info.get("name") or "").lower()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        for marker, tool in SUSPICIOUS_PROCESSES.items():
+            if marker in name:
+                found.append((name, tool))
+                break
+    return found
+
+
+def frame_checks(session_id: str, frame) -> list:
+    """Return review signals for the current camera frame."""
+    face_count = len(detect_faces(frame))
+    if face_count == 0:
+        return [IntegrityFlag(session_id, "no_face", "No face visible in the camera frame", "medium")]
+    if face_count > 1:
+        return [IntegrityFlag(session_id, "extra_person", f"{face_count} faces visible in the camera frame", "high")]
+    return []
 
 
 def run_checks(session_id: str) -> list:
@@ -58,5 +87,22 @@ def run_checks(session_id: str) -> list:
                 severity="high",
             )
         )
-    # TODO: append process_scan() results and CV-based flags here too
+    for process_name, tool in process_scan():
+        flags.append(
+            IntegrityFlag(
+                session_id=session_id,
+                flag_type="remote_access_process",
+                detail=f"{tool} process detected ({process_name})",
+                severity="high",
+            )
+        )
+    for device in get_unauthorized_devices():
+        flags.append(
+            IntegrityFlag(
+                session_id=session_id,
+                flag_type="external_device",
+                detail=device,
+                severity="medium",
+            )
+        )
     return flags

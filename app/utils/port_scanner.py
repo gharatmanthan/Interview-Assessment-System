@@ -1,6 +1,21 @@
 import subprocess
+import socket
 import serial.tools.list_ports
 import os
+
+
+def scan_ports(host="127.0.0.1", start_port=1, end_port=1024, timeout=0.08):
+    """Return open TCP ports for an explicitly supplied host and range."""
+    if not 1 <= start_port <= end_port <= 65535:
+        raise ValueError("Port range must be between 1 and 65535.")
+
+    open_ports = []
+    for port in range(start_port, end_port + 1):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(timeout)
+            if sock.connect_ex((host, port)) == 0:
+                open_ports.append(port)
+    return open_ports
 
 def get_unauthorized_devices():
     """

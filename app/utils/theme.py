@@ -1,11 +1,11 @@
 """
 Central theme definitions for the app.
 Palette:
-  Sidebar / dark surface : #1B1F2A
-  App background         : #F4F5F8
+    Sidebar / dark surface : #102A43
+    App background         : #F3F7F5
   Card surface           : #FFFFFF
-  Primary accent         : #5B5FEF  (indigo - trust, "AI")
-  Secondary accent       : #14B8A6  (teal - success / integrity-clear)
+    Primary accent         : #0F766E  (teal - trust and focus)
+    Secondary accent       : #E76F51  (coral - action and attention)
   Warning / flag         : #F59E0B  (amber - bias/integrity flags)
   Danger                 : #EF4444
   Text primary           : #1B1F2A
@@ -13,27 +13,31 @@ Palette:
 """
 
 COLORS = {
-    "sidebar": "#1B1F2A",
-    "sidebar_hover": "#262B3A",
-    "sidebar_active": "#5B5FEF",
-    "bg": "#F4F5F8",
+    "sidebar": "#102A43",
+    "sidebar_hover": "#183B56",
+    "sidebar_active": "#0F766E",
+    "bg": "#F3F7F5",
     "card": "#FFFFFF",
-    "primary": "#5B5FEF",
-    "primary_dark": "#4548C9",
-    "secondary": "#14B8A6",
+    "primary": "#0F766E",
+    "primary_dark": "#0B5F59",
+    "secondary": "#E76F51",
     "warning": "#F59E0B",
     "danger": "#EF4444",
-    "text": "#1B1F2A",
-    "text_muted": "#6B7280",
-    "border": "#E5E7EB",
+    "text": "#102A43",
+    "text_muted": "#627D98",
+    "border": "#D9E2EC",
 }
 
 STYLESHEET = f"""
 QWidget {{
     background-color: {COLORS['bg']};
     color: {COLORS['text']};
-    font-family: 'Segoe UI';
+    font-family: 'Aptos';
     font-size: 13px;
+}}
+
+QMainWindow, QWidget#LoginPage {{
+    background-color: {COLORS['bg']};
 }}
 
 QWidget#Sidebar {{
@@ -42,8 +46,8 @@ QWidget#Sidebar {{
 
 QLabel#BrandTitle {{
     color: #FFFFFF;
-    font-size: 16px;
-    font-weight: 600;
+    font-size: 19px;
+    font-weight: 700;
 }}
 
 QLabel#BrandSubtitle {{
@@ -77,8 +81,36 @@ QPushButton#NavButtonActive {{
     font-weight: 600;
 }}
 
+QLineEdit, QTextEdit, QSpinBox, QListWidget {{
+    background-color: #FFFFFF;
+    border: 1px solid {COLORS['border']};
+    border-radius: 7px;
+    padding: 9px 11px;
+    selection-background-color: {COLORS['primary']};
+}}
+
+QLineEdit:focus, QTextEdit:focus, QSpinBox:focus, QListWidget:focus {{
+    border: 2px solid {COLORS['primary']};
+    padding: 8px 10px;
+}}
+
+QListWidget::item {{
+    padding: 10px;
+    border-bottom: 1px solid #EEF2F1;
+}}
+
+QListWidget::item:selected {{
+    background-color: #DDF3EF;
+    color: {COLORS['text']};
+    border-left: 3px solid {COLORS['primary']};
+}}
+
+QPushButton {{
+    min-height: 18px;
+}}
+
 QLabel#PageTitle {{
-    font-size: 22px;
+    font-size: 25px;
     font-weight: 700;
     color: {COLORS['text']};
 }}
@@ -91,14 +123,31 @@ QLabel#PageSubtitle {{
 QWidget#Card {{
     background-color: {COLORS['card']};
     border: 1px solid {COLORS['border']};
-    border-radius: 12px;
+    border-radius: 10px;
+}}
+
+QGroupBox {{
+    background-color: {COLORS['card']};
+    border: 1px solid {COLORS['border']};
+    border-radius: 10px;
+    margin-top: 10px;
+    padding: 18px 14px 14px 14px;
+    font-weight: 700;
+    color: {COLORS['text']};
+}}
+
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    left: 14px;
+    padding: 0 6px;
+    background-color: {COLORS['bg']};
 }}
 
 QPushButton#PrimaryButton {{
     background-color: {COLORS['primary']};
     color: white;
     border: none;
-    border-radius: 8px;
+    border-radius: 7px;
     padding: 10px 20px;
     font-weight: 600;
     font-size: 13px;
@@ -111,15 +160,24 @@ QPushButton#PrimaryButton:hover {{
 QPushButton#SecondaryButton {{
     background-color: transparent;
     color: {COLORS['primary']};
-    border: 1px solid {COLORS['primary']};
-    border-radius: 8px;
+    border: 1px solid #9CCBC5;
+    border-radius: 7px;
     padding: 10px 20px;
     font-weight: 600;
     font-size: 13px;
 }}
 
 QPushButton#SecondaryButton:hover {{
-    background-color: #EEF0FF;
+    background-color: #E6F4F1;
+}}
+
+QPushButton:disabled {{
+    background-color: #D9E2EC;
+    color: #829AB1;
+}}
+
+QTextEdit {{
+    line-height: 1.4em;
 }}
 
 QLabel#Badge-flagged {{

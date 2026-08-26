@@ -3,6 +3,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
+from app.reports.analytics import get_dashboard_stats
+
 
 class StatCard(QWidget):
     def __init__(self, title, value, hint, accent="#5B5FEF"):
@@ -43,10 +45,11 @@ class DashboardPage(QWidget):
 
         grid = QGridLayout()
         grid.setSpacing(16)
-        grid.addWidget(StatCard("Interviews Conducted", "0", "This session", "#5B5FEF"), 0, 0)
-        grid.addWidget(StatCard("Avg. Explainability Score", "—", "Confidence in scoring", "#14B8A6"), 0, 1)
-        grid.addWidget(StatCard("Bias Flags Raised", "0", "Across demographic proxies", "#F59E0B"), 0, 2)
-        grid.addWidget(StatCard("Integrity Flags", "0", "Suspected AI-assisted answers", "#EF4444"), 0, 3)
+        stats = get_dashboard_stats()
+        grid.addWidget(StatCard("Interviews Conducted", str(stats["interviews_conducted"]), "Recorded sessions", "#5B5FEF"), 0, 0)
+        grid.addWidget(StatCard("Avg. Answer Score", f"{stats['avg_explainability_score']:.1f}", "Across scored answers", "#14B8A6"), 0, 1)
+        grid.addWidget(StatCard("Bias Flags Raised", str(stats["bias_flags_raised"]), "Counterfactual checks", "#F59E0B"), 0, 2)
+        grid.addWidget(StatCard("Integrity Flags", str(stats["integrity_flags"]), "Recorded session signals", "#EF4444"), 0, 3)
         layout.addLayout(grid)
 
         placeholder = QLabel(

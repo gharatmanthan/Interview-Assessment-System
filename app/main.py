@@ -3,6 +3,7 @@ AI-Powered Interview Assessment System
 Entry point for the desktop application.
 """
 import sys
+import argparse
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QFont
 
@@ -11,6 +12,10 @@ from app.utils.theme import STYLESHEET
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Run InterviewIQ.")
+    parser.add_argument("--role", choices=("candidate", "interviewer"), default="candidate")
+    args = parser.parse_args()
+
     app = QApplication(sys.argv)
     app.setApplicationName("Interview Assessment System")
     app.setStyleSheet(STYLESHEET)
@@ -18,7 +23,7 @@ def main():
     default_font = QFont("Segoe UI", 10)
     app.setFont(default_font)
 
-    window = MainWindow()
+    window = MainWindow(user_role=args.role)
     window.show()
 
     sys.exit(app.exec())
