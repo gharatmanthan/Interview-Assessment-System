@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react"
 import { toast } from "sonner"
 import { api } from "@/lib/api"
-import type { Settings, DeviceInfo, GmailStatus } from "@/lib/types"
+import type { Settings, DeviceInfo, GmailStatus, CalendarStatus } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -12,7 +12,7 @@ import { Separator } from "@/components/ui/separator"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import { Loader2, Eye, EyeOff, Globe, Laptop, Mail, Unlink } from "lucide-react"
+import { Loader2, Globe, Laptop, Mail, Unlink, CalendarDays } from "lucide-react"
 
 interface ConnectionConfig {
   backendMode: string
@@ -24,16 +24,23 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [showApiKey, setShowApiKey] = useState(false)
 
   const [settings, setSettings] = useState<Settings>({
     camera_index: 0,
     mic_device: "",
     llm_provider: "Groq",
-    llm_api_key: "",
     export_dir: "",
     gmail_connected: false,
     gmail_user: "",
+    calendar_connected: false,
+    calendar_user: "",
+    interview_duration_minutes: 45,
+    interview_buffer_minutes: 10,
+    work_start_hour: 9,
+    work_end_hour: 18,
+    scheduling_horizon_days: 30,
+    working_days: [0, 1, 2, 3, 4],
+    excluded_dates: [],
   })
 
   const [devices, setDevices] = useState<DeviceInfo[]>([])
@@ -41,19 +48,23 @@ export default function SettingsPage() {
   const [savingConn, setSavingConn] = useState(false)
   const [gmailStatus, setGmailStatus] = useState<GmailStatus>({ connected: false, email: "" })
   const [gmailLoading, setGmailLoading] = useState(false)
+  const [calendarStatus, setCalendarStatus] = useState<CalendarStatus>({ connected: false, email: "" })
+  const [calendarLoading, setCalendarLoading] = useState(false)
 
   const fetchData = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [settingsData, deviceList, gmailData] = await Promise.all([
+      const [settingsData, deviceList, gmailData, calendarData] = await Promise.all([
         api.getSettings(),
         api.getDevices(),
         api.getGmailStatus(),
+        api.getCalendarStatus(),
       ])
       setSettings(settingsData)
       setDevices(deviceList)
       setGmailStatus(gmailData)
+      setCalendarStatus(calendarData)
     } catch (err: any) {
       setError(err.message || "Failed to load settings")
       toast.error("Failed to load settings")
@@ -146,7 +157,47 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleCalendarConnect() {
+    setCalendarLoading(true)
+    try {
+      const result = await api.connectCalendar()
+      if (result.success) {
+        setCalendarStatus({ connected: true, email: result.email })
+        toast.success(result.message)
+      } else {
+        toast.error(result.message)
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Failed to connect Calendar")
+    } finally {
+      setCalendarLoading(false)
+    }
+  }
+
+  async function handleCalendarDisconnect() {
+    setCalendarLoading(true)
+    try {
+      await api.disconnectCalendar()
+      setCalendarStatus({ connected: false, email: "" })
+      toast.success("Calendar disconnected")
+    } catch (err: any) {
+      toast.error(err.message || "Failed to disconnect Calendar")
+    } finally {
+      setCalendarLoading(false)
+    }
+  }
+
   const LLM_PROVIDERS = ["Groq", "OpenAI", "Gemini", "Anthropic", "Ollama"]
+
+const WEEKDAYS = [
+  { value: 0, label: "Mon" },
+  { value: 1, label: "Tue" },
+  { value: 2, label: "Wed" },
+  { value: 3, label: "Thu" },
+  { value: 4, label: "Fri" },
+  { value: 5, label: "Sat" },
+  { value: 6, label: "Sun" },
+]
 
   if (loading) {
     return (
@@ -250,15 +301,9 @@ export default function SettingsPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="llm-api-key">API Key</Label>
-                  <div className="relative">
-                    <Input id="llm-api-key" type={showApiKey ? "text" : "password"} value={settings.llm_api_key} onChange={(e) => updateField("llm_api_key", e.target.value)} placeholder="Enter your API key" className="pr-10" />
-                    <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground hover:text-foreground" onClick={() => setShowApiKey(!showApiKey)}>
-                      {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
-                  </div>
-                </div>
+                <p className="text-xs text-muted-foreground">
+                  The model API key is read from the server environment (<code>GROQ_API_KEY</code>) and is never stored nor exposed through this app.
+                </p>
               </div>
 
               <Separator />
@@ -283,6 +328,90 @@ export default function SettingsPage() {
                     {gmailLoading ? (<><Loader2 className="mr-2 h-3 w-3 animate-spin" /> Connecting...</>) : (<><Mail className="mr-2 h-3 w-3" /> Connect Gmail</>)}
                   </Button>
                 )}
+              </div>
+
+              <Separator />
+
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold text-foreground">Calendar Integration (Auto-Scheduling)</h3>
+                <p className="text-xs text-muted-foreground">
+                  Connect Google Calendar so shortlisted candidates are automatically booked into your next free slot and receive the interview date by email.
+                </p>
+                {calendarStatus.connected ? (
+                  <div className="flex items-center justify-between rounded-lg border border-success/20 bg-success-bg p-3">
+                    <div className="flex items-center gap-2">
+                      <CalendarDays className="h-4 w-4 text-success-text" />
+                      <span className="text-sm text-success-text">Connected as {calendarStatus.email}</span>
+                    </div>
+                    <Button type="button" variant="ghost" size="sm" onClick={handleCalendarDisconnect} disabled={calendarLoading} className="text-destructive hover:text-destructive hover:bg-destructive/10">
+                      <Unlink className="h-3 w-3 mr-1" /> Disconnect
+                    </Button>
+                  </div>
+                ) : (
+                  <Button type="button" variant="outline" onClick={handleCalendarConnect} disabled={calendarLoading}>
+                    {calendarLoading ? (<><Loader2 className="mr-2 h-3 w-3 animate-spin" /> Connecting...</>) : (<><CalendarDays className="mr-2 h-3 w-3" /> Connect Google Calendar</>)}
+                  </Button>
+                )}
+              </div>
+
+              <Separator />
+
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold text-foreground">Interview Scheduling</h3>
+                <p className="text-xs text-muted-foreground">
+                  These preferences determine how the next available interview slot is chosen from your calendar.
+                </p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="duration">Interview duration (min)</Label>
+                    <Input id="duration" type="number" min={15} max={180} value={settings.interview_duration_minutes} onChange={(e) => updateField("interview_duration_minutes", Number(e.target.value))} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="buffer">Buffer between slots (min)</Label>
+                    <Input id="buffer" type="number" min={0} max={60} value={settings.interview_buffer_minutes} onChange={(e) => updateField("interview_buffer_minutes", Number(e.target.value))} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="work-start">Work start hour</Label>
+                    <Input id="work-start" type="number" min={0} max={23} value={settings.work_start_hour} onChange={(e) => updateField("work_start_hour", Number(e.target.value))} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="work-end">Work end hour</Label>
+                    <Input id="work-end" type="number" min={0} max={23} value={settings.work_end_hour} onChange={(e) => updateField("work_end_hour", Number(e.target.value))} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="horizon">Scheduling horizon (days)</Label>
+                    <Input id="horizon" type="number" min={1} max={90} value={settings.scheduling_horizon_days} onChange={(e) => updateField("scheduling_horizon_days", Number(e.target.value))} />
+                  </div>
+                  <div className="space-y-2 col-span-2">
+                    <Label>Working days</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {WEEKDAYS.map((d) => {
+                        const active = settings.working_days.includes(d.value)
+                        return (
+                          <button
+                            key={d.value}
+                            type="button"
+                            onClick={() => {
+                              const next = active
+                                ? settings.working_days.filter((v) => v !== d.value)
+                                : [...settings.working_days, d.value].sort()
+                              updateField("working_days", next)
+                            }}
+                            className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                              active ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-muted-foreground"
+                            }`}
+                          >
+                            {d.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                  <div className="space-y-2 col-span-2">
+                    <Label htmlFor="excluded-dates">Excluded dates (holidays, comma-separated YYYY-MM-DD)</Label>
+                    <Input id="excluded-dates" value={settings.excluded_dates.join(", ")} onChange={(e) => updateField("excluded_dates", e.target.value.split(",").map((s) => s.trim()).filter(Boolean))} placeholder="2026-12-25, 2026-01-01" />
+                  </div>
+                </div>
               </div>
 
               <Separator />

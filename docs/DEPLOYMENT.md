@@ -25,7 +25,8 @@ receives the resulting flags via `POST /api/integrity/flags` and stores them in 
 shared DB for the recruiter's Integrity Log.
 
 Recordings work the same way: captured locally with `MediaRecorder` inside Electron,
-then uploaded to `POST /api/sessions/{id}/upload` and streamed back from `/media/...`.
+then uploaded to `POST /api/sessions/{id}/upload` and streamed back from `/media/...`
+behind a short-lived HMAC-signed URL issued by `GET /api/media/sign` (recruiter auth required).
 
 ## Part 1 — Deploy the central API (Render / Railway free tier)
 
@@ -47,8 +48,9 @@ Notes:
   SQLite DB through `app/core/db.py`. The central instance owns that SQLite file
   (`data/app.db`); every connected desktop app reads/writes it over HTTP.
 - Free tiers sleep after inactivity; the first request of the day may take ~30s.
-- For anything beyond a student project, swap SQLite for Postgres and add auth
-  tokens before exposing the API publicly.
+- Recruiter routes are already protected by salted-hash login + HMAC bearer tokens;
+  candidate-facing endpoints (apply portal, candidate interview flow) intentionally
+  remain open — see `SECURITY.md`.
 
 ## Part 2 — Build the installer with the server URL baked in
 
@@ -79,8 +81,8 @@ Candidate laptop (Electron)                Central server (Render)           Rec
 ├─ webcam/mic capture (MediaRecorder)      ├─ SQLite: jobs, candidates,      ├─ Jobs / candidates CRUD
 ├─ port+process scan (local, native) ──►   │  scores, flags, sessions        ├─ Integrity Log ◄── reads flags
 ├─ flags POSTed ──────────────────────►    ├─ POST /api/integrity/flags      ├─ Reports + recording player
-├─ recording uploaded ────────────────►    ├─ POST /api/sessions/{id}/upload │   (/media/uploads/...)
-└─ questions/scores fetched ◄─────────     └─ serves /media/uploads/**       └─ PDF/CSV export
+├─ recording uploaded ────────────────►    ├─ POST /api/sessions/{id}/upload │   (signed GET /media/uploads/...)
+└─ questions/scores fetched ◄─────────     └─ serves signed /media/uploads/**  └─ PDF/CSV export
 ```
 
 ## Acceptance checklist

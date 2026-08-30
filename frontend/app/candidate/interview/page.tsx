@@ -44,6 +44,7 @@ export default function CandidateInterviewPage() {
   const candidate = typeof window !== "undefined" ? JSON.parse(sessionStorage.getItem("candidate") || "null") : null
   const job = typeof window !== "undefined" ? JSON.parse(sessionStorage.getItem("candidate_job") || "null") : null
   const sessionId = typeof window !== "undefined" ? sessionStorage.getItem("session_id") : null
+  const interviewToken = typeof window !== "undefined" ? sessionStorage.getItem("interview_token") || "" : ""
 
   useEffect(() => {
     if (!candidate || !job || !sessionId) {
@@ -52,7 +53,7 @@ export default function CandidateInterviewPage() {
     }
     async function init() {
       try {
-        await api.startCandidateSession(sessionId!, candidate.candidate_id, job.job_id)
+        await api.startCandidateSession(sessionId!, candidate.candidate_id, job.job_id, interviewToken)
         setSessionStarted(true)
       } catch {
         toast.error("Failed to start session")

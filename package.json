@@ -6,6 +6,7 @@
   "scripts": {
     "dev:frontend": "cd frontend && npm run dev",
     "dev:electron": "cd electron && npm run dev",
+    "start:electron": "cd electron && npm start",
     "build:frontend": "cd frontend && npm run build",
     "build:electron": "cd electron && npm run build",
     "install:all": "cd frontend && npm install && cd ../electron && npm install"

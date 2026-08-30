@@ -15,6 +15,7 @@ import {
   Settings,
   LogOut,
   ExternalLink,
+  CalendarClock,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -22,6 +23,8 @@ const navItems = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "Job Postings", href: "/jobs", icon: Briefcase },
   { label: "Candidates", href: "/candidates", icon: Users },
+  { label: "Applications", href: "/applications", icon: FileText },
+  { label: "Scheduled Interviews", href: "/scheduling", icon: CalendarClock },
   { label: "Live Monitor", href: "/live-monitor", icon: MonitorPlay },
   { label: "Interview", href: "/interview", icon: Video },
   { label: "Reports", href: "/reports", icon: FileText },
@@ -44,6 +47,7 @@ export default function Sidebar({ showLogout = true }: SidebarProps) {
 
   function handleLogout() {
     localStorage.removeItem("username")
+    localStorage.removeItem("interviewiq_token")
     router.push("/login")
   }
 

@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation"
 import Sidebar from "@/components/sidebar"
 import { FirstRunGate } from "@/components/first-run-gate"
 
-const NO_SIDEBAR_ROUTES = ["/login", "/"]
+const NO_SIDEBAR_ROUTES = ["/login", "/", "/apply"]
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()

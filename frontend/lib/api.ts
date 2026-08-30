@@ -1,6 +1,43 @@
-import type { JobPosting, Candidate, InterviewSession, DashboardStats, CompetencyScore, Explanation, FairnessFlag, IntegrityFlag, CandidateReport, ComparisonRow, Settings, DeviceInfo, InviteValidation, GmailStatus, GmailConnectResult, EmailCheckResult, PollLogEntry } from './types'
+import type { JobPosting, JobCreateInput, Candidate, InterviewSession, DashboardStats, CompetencyScore, Explanation, FairnessFlag, IntegrityFlag, CandidateReport, ComparisonRow, Settings, DeviceInfo, InviteValidation, GmailStatus, GmailConnectResult, EmailCheckResult, PollLogEntry, CalendarStatus, CalendarConnectResult, ScheduledInterview, ApplicationDetail, JobPipelineStat } from './types'
 
 let cachedBaseUrl: string | null = null
+
+const TOKEN_KEY = 'interviewiq_token'
+const USERNAME_KEY = 'interviewiq_username'
+
+export function getAuthToken(): string | null {
+  if (typeof window === 'undefined') return null
+  return window.localStorage.getItem(TOKEN_KEY)
+}
+
+export function setAuthToken(token: string | null) {
+  if (typeof window !== 'undefined') {
+    if (token) window.localStorage.setItem(TOKEN_KEY, token)
+    else window.localStorage.removeItem(TOKEN_KEY)
+  }
+}
+
+export function getUsername(): string | null {
+  if (typeof window === 'undefined') return null
+  return window.localStorage.getItem(USERNAME_KEY) ?? (typeof window !== 'undefined' ? window.localStorage.getItem('username') : null)
+}
+
+export function setUsername(username: string | null) {
+  if (typeof window !== 'undefined') {
+    if (username) window.localStorage.setItem(USERNAME_KEY, username)
+    else window.localStorage.removeItem(USERNAME_KEY)
+  }
+}
+
+export function clearAuth() {
+  setAuthToken(null)
+  setUsername(null)
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getAuthToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
 
 /**
  * Resolved API base URL.
@@ -24,15 +61,50 @@ export async function getBaseUrl(): Promise<string> {
   return cachedBaseUrl!
 }
 
-export function mediaUrl(relPath: string): Promise<string> {
-  return getBaseUrl().then((base) => `${base}/media/${relPath.replace(/^\/+/, '')}`)
+export async function mediaUrl(relPath: string): Promise<string> {
+  const baseUrl = await getBaseUrl()
+  const clean = relPath.replace(/^\/+/, '')
+  try {
+    const token = getAuthToken()
+    const res = await fetch(`${baseUrl}/api/media/sign?path=${encodeURIComponent(clean)}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (res.ok) {
+      const { url } = await res.json()
+      return `${baseUrl}${url}`
+    }
+  } catch {
+    // fall through to the unchanged URL — it will 403 if unsigned, which is
+    // the intended security posture
+  }
+  return `${baseUrl}/media/${clean}`
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const baseUrl = await getBaseUrl()
   const res = await fetch(`${baseUrl}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(),
+      ...options?.headers,
+    },
     ...options,
+  })
+  if (!res.ok) {
+    const err = await res.text()
+    if (res.status === 401) clearAuth()
+    throw new Error(`API error ${res.status}: ${err}`)
+  }
+  return res.json()
+}
+
+async function requestForm<T>(path: string, formData: FormData, extraHeaders?: Record<string, string>): Promise<T> {
+  const baseUrl = await getBaseUrl()
+  // No Content-Type header: the browser sets the multipart boundary.
+  const res = await fetch(`${baseUrl}${path}`, {
+    method: 'POST',
+    headers: { ...authHeaders(), ...extraHeaders },
+    body: formData,
   })
   if (!res.ok) {
     const err = await res.text()
@@ -41,31 +113,51 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json()
 }
 
-async function requestForm<T>(path: string, formData: FormData): Promise<T> {
-  const baseUrl = await getBaseUrl()
-  // No Content-Type header: the browser sets the multipart boundary.
-  const res = await fetch(`${baseUrl}${path}`, { method: 'POST', body: formData })
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`API error ${res.status}: ${err}`)
+function getInterviewTokenHeader(): Record<string, string> {
+  if (typeof window === 'undefined') return {}
+  const token = window.sessionStorage.getItem('interview_token')
+  return token ? { 'X-Interview-Token': token } : {}
+}
+
+function interviewTokenHeaderFor(requestOptions?: RequestInit): Record<string, string> {
+  const headers: Record<string, string> = {}
+  const existing = requestOptions?.headers
+  if (existing) {
+    const h = new Headers(existing)
+    h.forEach((value, key) => {
+      headers[key] = value
+    })
   }
-  return res.json()
+  return { ...headers, ...getInterviewTokenHeader() }
 }
 
 export const api = {
   // Auth
-  login: (username: string, password: string) =>
-    request<{ success: boolean; message: string; username?: string }>('/api/auth/login', {
+  login: async (username: string, password: string) => {
+    const res = await request<{ success: boolean; message: string; username?: string; token?: string }>('/api/auth/login', {
       method: 'POST', body: JSON.stringify({ username, password }),
-    }),
-  register: (username: string, password: string, full_name: string) =>
-    request<{ success: boolean; message: string; username?: string }>('/api/auth/register', {
+    })
+    if (res.success && res.token) {
+      setAuthToken(res.token)
+      setUsername(res.username ?? username)
+    }
+    return res
+  },
+  register: async (username: string, password: string, full_name: string) => {
+    const res = await request<{ success: boolean; message: string; username?: string; token?: string }>('/api/auth/register', {
       method: 'POST', body: JSON.stringify({ username, password, full_name }),
-    }),
+    })
+    if (res.success && res.token) {
+      setAuthToken(res.token)
+      setUsername(res.username ?? username)
+    }
+    return res
+  },
+  me: () => request<{ username: string; full_name: string }>('/api/auth/me'),
 
   // Jobs
   getJobs: () => request<JobPosting[]>('/api/jobs'),
-  createJob: (job: JobPosting) =>
+  createJob: (job: JobCreateInput) =>
     request<JobPosting>('/api/jobs', { method: 'POST', body: JSON.stringify(job) }),
   updateJob: (job_id: string, job: JobPosting) =>
     request<JobPosting>(`/api/jobs/${job_id}`, { method: 'PUT', body: JSON.stringify(job) }),
@@ -101,7 +193,8 @@ export const api = {
     if (files.audio) formData.append('audio', files.audio, filenames?.audio || `${session_id}_audio.webm`)
     return requestForm<{ success: boolean; saved: Record<string, string> }>(
       `/api/sessions/${session_id}/upload`,
-      formData
+      formData,
+      getInterviewTokenHeader()
     )
   },
 
@@ -112,7 +205,7 @@ export const api = {
     const base = await getBaseUrl()
     await fetch(`${base}/api/sessions/${session_id}/live-frame`, {
       method: 'POST',
-      headers: { 'Content-Type': 'image/jpeg' },
+      headers: { 'Content-Type': 'image/jpeg', ...getInterviewTokenHeader() },
       body: blob,
     })
   },
@@ -121,6 +214,7 @@ export const api = {
     try {
       const res = await fetch(`${base}/api/sessions/${session_id}/live-frame?t=${Date.now()}`, {
         cache: 'no-store',
+        headers: authHeaders(),
       })
       if (!res.ok) return null
       return URL.createObjectURL(await res.blob())
@@ -145,11 +239,14 @@ export const api = {
   // Integrity & Bias
   getIntegrityFlags: () => request<IntegrityFlag[]>('/api/integrity/flags'),
   getBiasFlags: () => request<FairnessFlag[]>('/api/bias/flags'),
-  postIntegrityFlags: (flags: Array<Pick<IntegrityFlag, 'session_id' | 'flag_type' | 'detail' | 'severity'>>) =>
-    request<{ saved: number }>('/api/integrity/flags', {
+  postIntegrityFlags: (flags: Array<Pick<IntegrityFlag, 'session_id' | 'flag_type' | 'detail' | 'severity'>>) => {
+    const itoken = typeof window !== 'undefined' ? window.sessionStorage.getItem('interview_token') || '' : ''
+    return request<{ saved: number }>('/api/integrity/flags', {
       method: 'POST',
       body: JSON.stringify({ flags }),
-    }),
+      headers: { 'X-Interview-Token': itoken },
+    })
+  },
 
   // Settings
   getSettings: () => request<Settings>('/api/settings'),
@@ -164,22 +261,26 @@ export const api = {
     request<InviteValidation>('/api/candidate/validate-code', {
       method: 'POST', body: JSON.stringify({ invite_code }),
     }),
-  recordConsent: (session_id: string, candidate_id: string) =>
+  recordConsent: (session_id: string, candidate_id: string, interview_token: string) =>
     request<{ success: boolean }>('/api/candidate/consent', {
-      method: 'POST', body: JSON.stringify({ session_id, candidate_id }),
+      method: 'POST', body: JSON.stringify({ session_id, candidate_id, interview_token }),
     }),
-  startCandidateSession: (session_id: string, candidate_id: string, job_id: string) =>
+  startCandidateSession: (session_id: string, candidate_id: string, job_id: string, interview_token: string) =>
     request<InterviewSession>('/api/candidate/start-session', {
-      method: 'POST', body: JSON.stringify({ session_id, candidate_id, job_id }),
+      method: 'POST', body: JSON.stringify({ session_id, candidate_id, job_id, interview_token }),
     }),
-  submitAnswer: (session_id: string, question_id: string, category: string, transcript: string) =>
-    request<{ score: CompetencyScore; explanation: Explanation; fairness: FairnessFlag | null }>('/api/candidate/submit-answer', {
-      method: 'POST', body: JSON.stringify({ session_id, question_id, category, transcript }),
-    }),
-  completeCandidateSession: (session_id: string) =>
-    request<{ success: boolean }>('/api/candidate/complete-session', {
-      method: 'POST', body: JSON.stringify({ session_id }),
-    }),
+  submitAnswer: (session_id: string, question_id: string, category: string, transcript: string) => {
+    const itoken = typeof window !== 'undefined' ? window.sessionStorage.getItem('interview_token') || '' : ''
+    return request<{ score: CompetencyScore; explanation: Explanation; fairness: FairnessFlag | null }>('/api/candidate/submit-answer', {
+      method: 'POST', body: JSON.stringify({ session_id, question_id, category, transcript, interview_token: itoken }),
+    })
+  },
+  completeCandidateSession: (session_id: string) => {
+    const itoken = typeof window !== 'undefined' ? window.sessionStorage.getItem('interview_token') || '' : ''
+    return request<{ success: boolean }>('/api/candidate/complete-session', {
+      method: 'POST', body: JSON.stringify({ session_id, interview_token: itoken }),
+    })
+  },
 
   // Gmail Integration
   getGmailStatus: () => request<GmailStatus>('/api/settings/gmail/status'),
@@ -193,4 +294,28 @@ export const api = {
     }),
   getPollLogs: () =>
     request<{ logs: PollLogEntry[] }>('/api/email-intake/poll-logs'),
+
+  // Google Calendar Integration
+  getCalendarStatus: () => request<CalendarStatus>('/api/settings/calendar/status'),
+  connectCalendar: () => request<CalendarConnectResult>('/api/settings/calendar/connect', { method: 'POST' }),
+  disconnectCalendar: () => request<{ success: boolean; message: string }>('/api/settings/calendar/disconnect', { method: 'POST' }),
+
+  // Scheduling
+  getScheduledInterviews: () => request<ScheduledInterview[]>('/api/scheduling'),
+  allocateSlot: (candidate_id: string, job_id: string) =>
+    request<{ success: boolean; scheduled_at?: string; duration_minutes?: number; message: string }>('/api/scheduling/allocate', {
+      method: 'POST', body: JSON.stringify({ candidate_id, job_id }),
+    }),
+
+  // Applications (candidate-first screening pipeline)
+  getApplications: (jobId?: string) =>
+    request<{ applications: ApplicationDetail[] }>(`/api/applications${jobId ? `?job_id=${jobId}` : ''}`),
+  getApplication: (applicationId: string) =>
+    request<ApplicationDetail>(`/api/applications/${applicationId}`),
+  getApplicationStats: () =>
+    request<{ jobs: JobPipelineStat[] }>('/api/applications/stats'),
+  rescreenApplication: (applicationId: string) =>
+    request<{ success: boolean; application_id: string; screening_status: string }>(`/api/applications/${applicationId}/rescreen`, {
+      method: 'POST',
+    }),
 }

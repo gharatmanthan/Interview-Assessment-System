@@ -1,24 +1,60 @@
-import secrets
-from fastapi import APIRouter
-from api.schemas import SessionResponse
-from app.core import db
-from app.core.models import Candidate, InterviewSession
 from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException
+
+from api.rate_limit import rate_limited
+from api.schemas import (
+    SessionResponse,
+    ValidateCodeRequest,
+    ConsentRequest,
+    StartSessionRequest,
+    SubmitAnswerRequest,
+    CompleteSessionRequest,
+)
+from app.core import db
+from app.core.models import InterviewSession
+from app.core.tokens import create_interview_token, verify_interview_token
 
 router = APIRouter()
 
 
-@router.post("/candidate/validate-code")
-def validate_invite_code(body: dict):
-    code = body.get("invite_code", "").strip()
+def _invite_status(candidate: dict) -> tuple[bool, str]:
+    """Cross-check the candidate's interview invites: expired/consumed
+    invites invalidate the code even if the candidate row still says 'invited'.
+    """
+    invites = db.get_interview_invites_for_candidate(candidate["candidate_id"])
+    for invite in invites:
+        if invite["status"] == "expired":
+            return False, "This invite has expired"
+        if invite["status"] == "consumed":
+            return False, "This invite has already been used"
+    return True, ""
+
+
+def _screening_eligible(candidate: dict) -> bool:
+    """Candidates linked to an application may interview only while their
+    latest screening decision is 'passed'. Manual candidates (no linked
+    application) are always eligible — the recruiter judged them directly."""
+    application_id = candidate.get("application_id")
+    if not application_id:
+        return True
+    result = db.get_screening_result(application_id)
+    return bool(result and result.get("decision") == "passed")
+
+
+@router.post("/candidate/validate-code", dependencies=[Depends(rate_limited("invite_code"))])
+def validate_invite_code(req: ValidateCodeRequest):
+    code = req.invite_code.strip()
     if not code:
         return {"valid": False, "message": "No invite code provided"}
 
-    candidates = db.get_all_candidates()
-    candidate = next((c for c in candidates if c["invite_code"] == code), None)
-
+    candidate = db.get_candidate_by_invite_code(code)
     if not candidate:
         return {"valid": False, "message": "Invalid invite code"}
+
+    ok, message = _invite_status(candidate)
+    if not ok:
+        return {"valid": False, "message": message}
 
     if candidate.get("status") == "completed":
         return {"valid": False, "message": "This interview has already been completed"}
@@ -26,43 +62,113 @@ def validate_invite_code(body: dict):
     if candidate.get("status") == "expired":
         return {"valid": False, "message": "This invite code has expired"}
 
-    jobs = db.get_all_job_postings()
-    job = next((j for j in jobs if j["job_id"] == candidate["job_id"]), None)
+    # Re-check screening eligibility on every validation instead of trusting a
+    # decision taken when the invite was issued.
+    if not _screening_eligible(candidate):
+        return {"valid": False, "message": "Your application no longer qualifies for this interview"}
+
+    job = db.get_job_posting(candidate["job_id"])
+    if not job:
+        return {"valid": False, "message": "Invalid invite code"}
+
+    # Bind this validated invite to a short-lived, purpose-scoped token so
+    # later steps (consent / start-session) derive identity server-side.
+    token, exp = create_interview_token(candidate["candidate_id"], job["job_id"])
+
+    # Do not echo the raw invite code back to the browser; it is bearer.
+    safe_candidate = {k: v for k, v in candidate.items() if k != "invite_code"}
 
     return {
         "valid": True,
-        "candidate": candidate,
+        "candidate": safe_candidate,
         "job": job,
+        "interview_token": token,
+        "expires_at": datetime.fromtimestamp(exp).isoformat(),
     }
 
 
+def _identity_from_token(req) -> tuple[str, str]:
+    """Derive (candidate_id, job_id) from the signed interview token. The
+    client-supplied candidate_id/job_id are ignored for security purposes so a
+    peeked/edited request cannot impersonate another candidate."""
+    if not req.interview_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Interview access token is required. Please re-enter your invite code.",
+        )
+    identity = verify_interview_token(req.interview_token)
+    if not identity:
+        raise HTTPException(
+            status_code=401,
+            detail="Interview access token is missing, invalid, or expired. Please re-enter your invite code.",
+        )
+    return identity
+
+
+def _require_token_owns_session(req) -> tuple[str, str]:
+    """Require the interview token to be valid AND bound to the session in the
+    request. Guards candidate-scoring endpoints (submit-answer, complete-session)
+    against cross-candidate/arbitrary-session writes."""
+    candidate_id, job_id = _identity_from_token(req)
+    candidate = db.get_candidate(candidate_id)
+    if not candidate or candidate.get("job_id") != job_id:
+        raise HTTPException(status_code=401, detail="Interview access token is invalid.")
+    if candidate.get("session_id") != req.session_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Session does not belong to this candidate.",
+        )
+    return candidate_id, job_id
+
+
 @router.post("/candidate/consent")
-def record_consent(body: dict):
-    session_id = body.get("session_id")
-    candidate_id = body.get("candidate_id")
-    if not session_id or not candidate_id:
+def record_consent(req: ConsentRequest):
+    if not req.session_id:
         return {"success": False, "message": "Missing required fields"}
 
-    db.update_candidate_status(candidate_id, "in_progress")
+    candidate_id, job_id = _identity_from_token(req)
+
+    candidate = db.get_candidate(candidate_id)
+    if not candidate or candidate.get("job_id") != job_id:
+        raise HTTPException(status_code=401, detail="Interview access token is invalid.")
+
+    # Bind the session to the candidate now (the device-check and interview
+    # pages post integrity flags / answers for this session before any
+    # start-session call): the ownership checks across all candidate endpoints
+    # rely on candidate.session_id being set from consent onward.
+    db.update_candidate_status(candidate_id, "in_progress", session_id=req.session_id)
     return {"success": True}
 
 
 @router.post("/candidate/start-session", response_model=SessionResponse)
-def start_candidate_session(body: dict):
-    session_id = body.get("session_id")
-    candidate_id = body.get("candidate_id")
-    job_id = body.get("job_id")
+def start_candidate_session(req: StartSessionRequest):
+    candidate_id, job_id = _identity_from_token(req)
 
-    candidates = db.get_all_candidates()
-    candidate = next((c for c in candidates if c["candidate_id"] == candidate_id), None)
-    candidate_name = candidate["name"] if candidate else "Unknown"
+    candidate = db.get_candidate(candidate_id)
+    if not candidate or candidate.get("job_id") != job_id:
+        raise HTTPException(status_code=401, detail="Interview access token is invalid.")
+    candidate_name = candidate["name"]
 
-    jobs = db.get_all_job_postings()
-    job = next((j for j in jobs if j["job_id"] == job_id), None)
-    job_title = job["title"] if job else "Unknown"
+    job = db.get_job_posting(job_id)
+    if not job:
+        raise HTTPException(status_code=401, detail="Interview access token is invalid.")
+    job_title = job["title"]
+
+    # Preserve one-time-use semantics: an already used/expired invite cannot
+    # start a second session even with a still-valid token.
+    ok, message = _invite_status(candidate)
+    if not ok:
+        raise HTTPException(status_code=409, detail=message)
+
+    # Screening eligibility can change after the token was issued (re-screen).
+    if not _screening_eligible(candidate):
+        raise HTTPException(
+            status_code=409,
+            detail="Your application no longer qualifies for this interview",
+        )
 
     session = InterviewSession(
-        session_id=session_id,
+        session_id=req.session_id,
         candidate_name=candidate_name,
         job_title=job_title,
         job_id=job_id,
@@ -71,7 +177,13 @@ def start_candidate_session(body: dict):
     )
     db.save_session(session)
 
-    db.update_candidate_status(candidate_id, "in_progress", session_id=session_id)
+    db.update_candidate_status(candidate_id, "in_progress", session_id=req.session_id)
+
+    # Consume the interview invite: a session start is one-time use.
+    for invite in db.get_interview_invites_for_candidate(candidate_id):
+        if invite["status"] == "active":
+            db.consume_interview_invite(invite["id"])
+            break
 
     return SessionResponse(
         session_id=session.session_id,
@@ -84,23 +196,18 @@ def start_candidate_session(body: dict):
 
 
 @router.post("/candidate/submit-answer")
-def submit_answer(body: dict):
+def submit_answer(req: SubmitAnswerRequest):
     from app.engine.scoring import score_answer
     from app.engine.explainability import explain_score
     from app.engine.fairness import audit_bias
     from app.engine.rag import retrieve_rubric
 
-    session_id = body.get("session_id")
-    question_id = body.get("question_id")
-    category = body.get("category")
-    transcript = body.get("transcript")
+    _require_token_owns_session(req)
 
-    rubric = retrieve_rubric("general", category)
-    score_result = score_answer(session_id, question_id, category, transcript, rubric)
-    explanation = explain_score(session_id, question_id, transcript, score_result.score)
-    fairness = audit_bias(session_id, question_id, transcript, score_result.score)
-
-    from app.core.models import CompetencyScore, ExplanationItem, FairnessFlag
+    rubric = retrieve_rubric("general", req.category)
+    score_result = score_answer(req.session_id, req.question_id, req.category, req.transcript, rubric)
+    explanation = explain_score(req.session_id, req.question_id, req.transcript, score_result.score)
+    fairness = audit_bias(req.session_id, req.question_id, req.transcript, score_result.score)
 
     db.save_competency_score(score_result)
     db.save_explanation(explanation)
@@ -110,21 +217,21 @@ def submit_answer(body: dict):
 
     return {
         "score": {
-            "session_id": session_id,
-            "question_id": question_id,
-            "category": category,
+            "session_id": req.session_id,
+            "question_id": req.question_id,
+            "category": req.category,
             "score": score_result.score,
             "confidence": score_result.confidence,
         },
         "explanation": {
-            "session_id": session_id,
-            "question_id": question_id,
+            "session_id": req.session_id,
+            "question_id": req.question_id,
             "summary": explanation.summary,
             "supporting_phrases": explanation.supporting_phrases,
         },
         "fairness": {
-            "session_id": session_id,
-            "question_id": question_id,
+            "session_id": req.session_id,
+            "question_id": req.question_id,
             "score_delta": fairness.score_delta if fairness else 0,
             "note": fairness.note if fairness else "",
         } if fairness else None,
@@ -132,13 +239,14 @@ def submit_answer(body: dict):
 
 
 @router.post("/candidate/complete-session")
-def complete_session(body: dict):
-    session_id = body.get("session_id")
+def complete_session(req: CompleteSessionRequest):
+    session_id = req.session_id
     if not session_id:
         return {"success": False, "message": "Missing session_id"}
 
-    sessions = db.get_all_sessions()
-    session = next((s for s in sessions if s["session_id"] == session_id), None)
+    _require_token_owns_session(req)
+
+    session = db.get_session(session_id)
     if session:
         session["status"] = "completed"
         session["completed_at"] = datetime.now().isoformat()

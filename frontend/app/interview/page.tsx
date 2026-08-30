@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { api, getBaseUrl } from "@/lib/api"
+import { api, getBaseUrl, getAuthToken } from "@/lib/api"
 import type { InterviewSession, IntegrityFlag } from "@/lib/types"
 import {
   Camera,
@@ -70,6 +70,8 @@ function getFlagSeverityBadge(severity: string) {
   }
 }
 
+type ScoringResult = Awaited<ReturnType<typeof api.runScoring>>
+
 export default function InterviewPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
@@ -82,7 +84,7 @@ export default function InterviewPage() {
   const [transcript, setTranscript] = useState("")
   const [category, setCategory] = useState("behavioral")
   const [integrityFlags, setIntegrityFlags] = useState<IntegrityFlag[]>([])
-  const [scoringResult, setScoringResult] = useState<any>(null)
+  const [scoringResult, setScoringResult] = useState<ScoringResult | null>(null)
   const [candidateName, setCandidateName] = useState("")
   const [jobTitle, setJobTitle] = useState("")
   const [elapsedTime, setElapsedTime] = useState(0)
@@ -121,7 +123,8 @@ export default function InterviewPage() {
 
   const connectWebSocket = useCallback((sessionId: string) => {
     getBaseUrl().then((base) => {
-      const wsUrl = `${base.replace(/^http/, "ws")}/api/ws/integrity/${sessionId}`
+      const token = getAuthToken() || ''
+      const wsUrl = `${base.replace(/^http/, "ws")}/api/ws/integrity/${sessionId}?token=${encodeURIComponent(token)}`
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws
       ws.onopen = () => setWsConnected(true)

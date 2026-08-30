@@ -1,6 +1,8 @@
 import io
+import json
 
 from app.core import db
+from app.core import settings_store
 from app.core.models import (
     Candidate,
     CompetencyScore,
@@ -105,6 +107,7 @@ class TestJobsApi:
 
 class TestCandidatesApi:
     def test_create_assigns_invite_code_and_lists(self, client):
+        create_job(client)
         created = create_candidate(client)
         assert created.status_code == 200
         code = created.json()["invite_code"]
@@ -124,6 +127,7 @@ class TestCandidatesApi:
         assert [r["candidate_id"] for r in rows] == ["cand-2"]
 
     def test_resend_invite_rotates_code(self, client):
+        create_job(client)
         original = create_candidate(client).json()["invite_code"]
 
         resent = client.post("/api/candidates/cand-1/resend")
@@ -134,7 +138,32 @@ class TestCandidatesApi:
         stored = db.get_candidate_by_invite_code(new_code)
         assert stored["status"] == "invited"
 
+    def test_resend_invite_requeues_email_and_fresh_invite(self, client):
+        create_job(client)
+        create_candidate(client)
+
+        db.enqueue_notification(
+            None, "job-1", "interview_invite", "jane@example.com",
+            "old subject", "old body", candidate_id="cand-1",
+        )
+
+        resent = client.post("/api/candidates/cand-1/resend")
+        assert resent.status_code == 200
+
+        pending = db.get_pending_notifications()
+        invites = [n for n in pending if n["notification_type"] == "interview_invite"
+                   and n["candidate_id"] == "cand-1"]
+        assert len(invites) == 1
+        assert invites[0]["recipient"] == "jane@example.com"
+        assert invites[0]["body"] == db.get_all_candidates()[0]["invite_code"]
+
+        # A single fresh active invite replaces any stale rows.
+        rows = db.get_interview_invites_for_candidate("cand-1")
+        assert len(rows) == 1
+        assert rows[0]["status"] == "active"
+
     def test_delete_candidate(self, client):
+        create_job(client)
         create_candidate(client)
         client.delete("/api/candidates/cand-1")
         assert client.get("/api/candidates").json() == []
@@ -193,23 +222,28 @@ class TestCandidateFlowApi:
         resp = client.post("/api/candidate/validate-code", json={"invite_code": code})
         assert resp.json()["valid"] is False
 
-    def test_consent_requires_fields_then_marks_in_progress(self, client):
-        self.seed_invited_candidate(client)
+    def test_consent_requires_token_then_marks_in_progress(self, client):
+        code = self.seed_invited_candidate(client)
+        token = client.post("/api/candidate/validate-code", json={"invite_code": code}).json()["interview_token"]
 
-        missing = client.post("/api/candidate/consent", json={"session_id": "s1"})
-        assert missing.json() == {"success": False, "message": "Missing required fields"}
+        missing = client.post("/api/candidate/consent", json={})
+        assert missing.status_code == 422
+
+        denied = client.post("/api/candidate/consent", json={"session_id": "s1"})
+        assert denied.status_code == 401
 
         ok = client.post("/api/candidate/consent", json={
-            "session_id": "s1", "candidate_id": "cand-1",
+            "session_id": "s1", "interview_token": token,
         })
         assert ok.json() == {"success": True}
         assert db.get_all_candidates()[0]["status"] == "in_progress"
 
     def test_start_session_resolves_names_and_links_candidate(self, client):
-        self.seed_invited_candidate(client)
+        code = self.seed_invited_candidate(client)
+        token = client.post("/api/candidate/validate-code", json={"invite_code": code}).json()["interview_token"]
 
         resp = client.post("/api/candidate/start-session", json={
-            "session_id": "sess-1", "candidate_id": "cand-1", "job_id": "job-1",
+            "session_id": "sess-1", "interview_token": token,
         })
         body = resp.json()
         assert body["candidate_name"] == "Jane Doe"
@@ -225,11 +259,17 @@ class TestCandidateFlowApi:
             "I would discuss time complexity first, then handle edge cases "
             "before describing the optimal approach with a concrete example."
         )
+        code = self.seed_invited_candidate(client)
+        token = client.post("/api/candidate/validate-code", json={"invite_code": code}).json()["interview_token"]
+        client.post("/api/candidate/start-session", json={
+            "session_id": "sess-1", "interview_token": token,
+        })
         resp = client.post("/api/candidate/submit-answer", json={
             "session_id": "sess-1",
             "question_id": "q1",
             "category": "dsa",
             "transcript": transcript,
+            "interview_token": token,
         })
 
         assert resp.status_code == 200
@@ -243,15 +283,18 @@ class TestCandidateFlowApi:
         assert len(db.get_all_fairness_flags()) == 1
 
     def test_complete_session_marks_session_and_candidate_done(self, client):
-        self.seed_invited_candidate(client)
+        code = self.seed_invited_candidate(client)
+        token = client.post("/api/candidate/validate-code", json={"invite_code": code}).json()["interview_token"]
         client.post("/api/candidate/start-session", json={
-            "session_id": "sess-1", "candidate_id": "cand-1", "job_id": "job-1",
+            "session_id": "sess-1", "interview_token": token,
         })
 
         missing = client.post("/api/candidate/complete-session", json={})
-        assert missing.json() == {"success": False, "message": "Missing session_id"}
+        assert missing.status_code == 422
 
-        done = client.post("/api/candidate/complete-session", json={"session_id": "sess-1"})
+        done = client.post("/api/candidate/complete-session", json={
+            "session_id": "sess-1", "interview_token": token,
+        })
         assert done.json() == {"success": True}
 
         session = db.get_all_sessions()[0]
@@ -261,10 +304,20 @@ class TestCandidateFlowApi:
 
 
 class TestSessionsAndScoringApi:
-    def test_create_and_list_sessions(self, client):
-        client.post("/api/sessions", json={
-            "session_id": "sess-1", "candidate_name": "Jane", "job_title": "BE",
+    def test_create_and_list_sessions(self, client, fresh_db):
+        create_job(client)
+        client.post("/api/candidates", json={
+            "candidate_id": "cand-1", "job_id": "job-1",
+            "name": "Jane", "email": "jane@example.com",
         })
+        created = client.post("/api/sessions", json={
+            "session_id": "sess-1", "candidate_name": "Jane", "job_title": "BE",
+            "job_id": "job-1",
+        })
+        assert created.status_code == 200
+        # Link the session to the candidate so ownership resolves.
+        db.update_candidate_status("cand-1", "invited", session_id="sess-1")
+
         rows = client.get("/api/sessions").json()
         assert len(rows) == 1
         assert rows[0]["session_id"] == "sess-1"
@@ -297,8 +350,14 @@ class TestReportsApi:
         db.save_job_posting(JobPosting(
             job_id="job-1", title="Backend Engineer", description="d",
             required_skills=["Python"], experience_level="Junior", department="Eng",
+            created_by="recruiter",
         ))
         for sess_id, name, score in [("s-low", "Ann", 40.0), ("s-high", "Bob", 80.0)]:
+            db.save_candidate(Candidate(
+                candidate_id=f"cand-{sess_id}", job_id="job-1", name=name,
+                email=f"{name.lower()}@example.com", invite_code=sess_id.upper(),
+                status="in_progress", session_id=sess_id,
+            ))
             db.save_session(InterviewSession(
                 session_id=sess_id, candidate_name=name,
                 job_title="Backend Engineer", job_id="job-1",
@@ -338,8 +397,9 @@ class TestReportsApi:
         filtered = client.get("/api/reports/compare", params={"job_id": "job-1"}).json()
         assert [r["session_id"] for r in filtered] == ["s-high", "s-low"]
 
-        empty = client.get("/api/reports/compare", params={"job_id": "missing"}).json()
-        assert empty == []
+        # Filtering by a job you don't own is refused (authz boundary).
+        other = client.get("/api/reports/compare", params={"job_id": "not-yours"})
+        assert other.status_code == 403
 
     def test_export_csv_streams_rows(self, client):
         self.seed_two_scored_sessions(client)
@@ -359,7 +419,15 @@ class TestSettingsApi:
         settings = client.get("/api/settings").json()
         assert settings["camera_index"] == 0
         assert settings["llm_provider"] == "Groq"
-        assert settings["llm_api_key"] == ""
+
+    def test_api_key_never_exposed(self, client):
+        # The model API key is read from the server environment and must never
+        # be persisted in settings.json nor echoed back through the API.
+        settings = client.get("/api/settings").json()
+        assert "llm_api_key" not in settings
+        if settings_store.SETTINGS_PATH.exists():
+            raw = json.loads(settings_store.SETTINGS_PATH.read_text())
+            assert raw.get("llm_api_key", "") == ""
 
     def test_partial_update_merges_with_existing(self, client):
         resp = client.put("/api/settings", json={"camera_index": 2})

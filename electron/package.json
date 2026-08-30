@@ -3,13 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "description": "AI-Powered Interview Assessment System",
+  "main": "dist/main.js",
   "scripts": {
-    "build:frontend": "cd frontend && npm run build",
-    "build:electron": "cd electron && npm run build",
-    "build:python": "cd .. && pip install -r requirements.txt",
-    "build": "npm run build:frontend && npm run build:electron",
-    "start": "cd electron && npm run start",
-    "install:all": "cd frontend && npm install && cd ../electron && npm install"
+    "build": "tsc",
+    "start": "npx electron .",
+    "dev": "npx electron . --dev"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

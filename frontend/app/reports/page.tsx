@@ -59,6 +59,7 @@ export default function ReportsPage() {
   const [loadingSessions, setLoadingSessions] = useState(true)
   const [loadingComparison, setLoadingComparison] = useState(true)
   const [loadingReport, setLoadingReport] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [sortField, setSortField] = useState<string>("overall_score")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
   const [filterJobId, setFilterJobId] = useState<string>("all")
@@ -66,9 +67,21 @@ export default function ReportsPage() {
   const router = useRouter()
 
   useEffect(() => {
-    api.getSessions().then(setSessions).catch(() => {}).finally(() => setLoadingSessions(false))
-    api.getComparison().then(setComparison).catch(() => {}).finally(() => setLoadingComparison(false))
-    api.getJobs().then(setJobs).catch(() => {})
+    function loadAll() {
+      setLoadError(null)
+      Promise.all([api.getSessions(), api.getComparison(), api.getJobs()])
+        .then(([sessions, comparison, jobs]) => {
+          setSessions(sessions)
+          setComparison(comparison)
+          setJobs(jobs)
+        })
+        .catch((err: any) => setLoadError(err.message || "Failed to load reports"))
+        .finally(() => {
+          setLoadingSessions(false)
+          setLoadingComparison(false)
+        })
+    }
+    loadAll()
   }, [])
 
   useEffect(() => {
@@ -139,7 +152,33 @@ export default function ReportsPage() {
                   <CardTitle className="text-lg">Sessions</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  {loadingSessions ? (
+                  {loadError ? (
+                    <div className="space-y-3 py-4 text-center">
+                      <p className="text-sm text-destructive">{loadError}</p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setLoadingSessions(true)
+                          setLoadingComparison(true)
+                          setLoadError(null)
+                          Promise.all([api.getSessions(), api.getComparison(), api.getJobs()])
+                            .then(([sessions, comparison, jobs]) => {
+                              setSessions(sessions)
+                              setComparison(comparison)
+                              setJobs(jobs)
+                            })
+                            .catch((err: any) => setLoadError(err.message || "Failed to load reports"))
+                            .finally(() => {
+                              setLoadingSessions(false)
+                              setLoadingComparison(false)
+                            })
+                        }}
+                      >
+                        Retry
+                      </Button>
+                    </div>
+                  ) : loadingSessions ? (
                     <div className="space-y-3 py-4 text-center text-sm text-muted-foreground">Loading...</div>
                   ) : sessions.length === 0 ? (
                     <EmptyState
@@ -289,7 +328,33 @@ export default function ReportsPage() {
           </TabsContent>
 
           <TabsContent value="comparison">
-            {loadingComparison ? (
+            {loadError ? (
+              <div className="py-16 text-center">
+                <p className="text-sm text-destructive">{loadError}</p>
+                <Button
+                  variant="outline"
+                  className="mt-4"
+                  onClick={() => {
+                    setLoadingSessions(true)
+                    setLoadingComparison(true)
+                    setLoadError(null)
+                    Promise.all([api.getSessions(), api.getComparison(), api.getJobs()])
+                      .then(([sessions, comparison, jobs]) => {
+                        setSessions(sessions)
+                        setComparison(comparison)
+                        setJobs(jobs)
+                      })
+                      .catch((err: any) => setLoadError(err.message || "Failed to load comparison"))
+                      .finally(() => {
+                        setLoadingSessions(false)
+                        setLoadingComparison(false)
+                      })
+                  }}
+                >
+                  Retry
+                </Button>
+              </div>
+            ) : loadingComparison ? (
               <div className="py-16 text-center text-sm text-muted-foreground">Loading comparison data...</div>
             ) : sortedComparison.length === 0 ? (
               <Card>

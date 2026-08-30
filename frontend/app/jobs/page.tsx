@@ -20,7 +20,7 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog"
-import { Pencil, Trash2, Plus, Briefcase, Mail, Loader2, History, Info } from "lucide-react"
+import { Pencil, Trash2, Plus, Briefcase, Mail, Loader2, History, Info, Link, Check } from "lucide-react"
 import { SkillTagInput } from "@/components/skill-tag-input"
 import { EmptyState } from "@/components/empty-state"
 
@@ -70,6 +70,7 @@ function emptyForm(): Omit<JobPosting, "job_id"> {
 export default function JobsPage() {
   const [jobs, setJobs] = useState<JobPosting[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState(emptyForm())
@@ -80,12 +81,15 @@ export default function JobsPage() {
   const [pollLogs, setPollLogs] = useState<PollLogEntry[]>([])
   const [showPollLogs, setShowPollLogs] = useState(false)
   const [backendMode, setBackendMode] = useState<string>("local")
+  const [copiedJobId, setCopiedJobId] = useState<string | null>(null)
 
   async function fetchJobs() {
     try {
       const data = await api.getJobs()
       setJobs(data)
+      setError(null)
     } catch (err: any) {
+      setError(err.message || "Failed to load jobs")
       toast.error(err.message || "Failed to load jobs")
     } finally {
       setLoading(false)
@@ -140,18 +144,12 @@ export default function JobsPage() {
       toast.error("Competency weights must sum to 100")
       return
     }
-    const payload: JobPosting = {
-      job_id: editingId ?? "",
-      ...form,
-      required_skills: form.required_skills,
-    }
-
     try {
       if (editing && editingId) {
-        await api.updateJob(editingId, payload)
+        await api.updateJob(editingId, { job_id: editingId, ...form } as JobPosting)
         toast.success("Job posting updated")
       } else {
-        await api.createJob(payload)
+        await api.createJob(form)
         toast.success("Job posting created")
       }
       cancelForm()
@@ -190,6 +188,18 @@ export default function JobsPage() {
     }
   }
 
+  async function handleCopyApplicationLink(jobId: string) {
+    if (!jobId || jobId.trim() === "") {
+      toast.error("Unable to create application link: job ID is missing.")
+      return
+    }
+    const url = `${window.location.origin}/apply?jobId=${encodeURIComponent(jobId)}`
+    await navigator.clipboard.writeText(url)
+    setCopiedJobId(jobId)
+    toast.success("Application link copied to clipboard")
+    setTimeout(() => setCopiedJobId(null), 2000)
+  }
+
   function updateWeight(key: string, value: number) {
     setForm((prev) => ({
       ...prev,
@@ -201,6 +211,15 @@ export default function JobsPage() {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <p className="text-muted-foreground text-sm">Loading jobs...</p>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <p className="text-sm text-destructive">{error}</p>
+        <Button variant="outline" onClick={fetchJobs}>Retry</Button>
       </div>
     )
   }
@@ -365,6 +384,19 @@ export default function JobsPage() {
                     <TableCell>{job.created_at ? new Date(job.created_at).toLocaleDateString() : "—"}</TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          title="Copy application link"
+                          onClick={() => handleCopyApplicationLink(job.job_id)}
+                        >
+                          {copiedJobId === job.job_id ? (
+                            <Check className="h-4 w-4 text-green-600" />
+                          ) : (
+                            <Link className="h-4 w-4" />
+                          )}
+                        </Button>
                         {job.application_gmail_label && (
                           <Button
                             variant="ghost"

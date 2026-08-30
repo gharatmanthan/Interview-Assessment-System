@@ -6,6 +6,7 @@ import { api } from "@/lib/api"
 import type { InterviewSession } from "@/lib/types"
 import { EmptyState } from "@/components/empty-state"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 
 const POLL_MS = 2000
 
@@ -71,10 +72,12 @@ function LiveFeedTile({ feed }: { feed: Feed }) {
 export default function LiveMonitorPage() {
   const [feeds, setFeeds] = useState<Feed[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [loadError, setLoadError] = useState(false)
 
   const pollSessions = useCallback(async () => {
     try {
       const sessions: InterviewSession[] = await api.getSessions()
+      setLoadError(false)
       setFeeds(
         sessions
           .filter((s) => s.status === "in_progress")
@@ -85,6 +88,7 @@ export default function LiveMonitorPage() {
           }))
       )
     } catch {
+      setLoadError(true)
     } finally {
       setLoaded(true)
     }
@@ -113,7 +117,12 @@ export default function LiveMonitorPage() {
         )}
       </div>
 
-      {!loaded ? null : feeds.length === 0 ? (
+      {!loaded ? null : loadError ? (
+        <div className="flex flex-col items-center justify-center gap-4 py-16 text-center">
+          <p className="text-sm text-destructive">Could not reach the monitoring feed. Retrying automatically…</p>
+          <Button variant="outline" size="sm" onClick={pollSessions}>Retry now</Button>
+        </div>
+      ) : feeds.length === 0 ? (
         <EmptyState
           icon={Radio}
           title="No live interviews right now"

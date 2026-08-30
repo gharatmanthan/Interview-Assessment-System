@@ -9,12 +9,15 @@ import argparse
 import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from app.core import db
-from api.routes import auth, jobs, candidates, sessions, scoring, reports, integrity, settings, devices, candidate_flow, email_intake
+from api.routes import (
+    auth, jobs, candidates, sessions, scoring, reports, integrity, settings,
+    devices, candidate_flow, email_intake, public_apply, scheduling,
+    applications, media,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +42,8 @@ async def _background_poll():
                     results = check_for_new_applications(job["job_id"])
                     total = len(results)
                     invited = sum(1 for r in results if r.get("status") == "invited")
-                    below = sum(1 for r in results if r.get("status") == "below_threshold")
-                    skipped = sum(1 for r in results if r.get("status") in ("skipped", "error"))
+                    below = sum(1 for r in results if r.get("status") in ("below_threshold", "not_shortlisted"))
+                    skipped = sum(1 for r in results if r.get("status") in ("skipped", "error", "duplicate"))
                     failed = sum(1 for r in results if r.get("status") == "invite_send_failed")
                     if total > 0:
                         db.save_poll_log(
@@ -66,14 +69,21 @@ async def _background_poll():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    from app.screening.worker import start_workers, workers_enabled
+    # Start the screening + email-outbox workers (daemon threads) unless the
+    # operator disabled them (tests do) — otherwise they'd race our callers.
+    start_workers()
     global _bg_poll_task
-    _bg_poll_task = asyncio.create_task(_background_poll())
+    _bg_poll_task = None
+    if workers_enabled():
+        _bg_poll_task = asyncio.create_task(_background_poll())
     yield
-    _bg_poll_task.cancel()
-    try:
-        await _bg_poll_task
-    except asyncio.CancelledError:
-        pass
+    if _bg_poll_task:
+        _bg_poll_task.cancel()
+        try:
+            await _bg_poll_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(
@@ -82,10 +92,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+def _allowed_origins() -> list[str]:
+    """CORS origins come from the FRONTEND_ORIGIN env var (comma separated).
+    Defaults to local Next.js dev so a fresh checkout works, but production
+    deployments must pin this to their real frontend origin.
+    """
+    raw = os.environ.get(
+        "FRONTEND_ORIGIN",
+        "http://localhost:3000,http://127.0.0.1:3000",
+    )
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_allowed_origins(),
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -101,13 +124,25 @@ app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(devices.router, prefix="/api/devices", tags=["devices"])
 app.include_router(candidate_flow.router, prefix="/api", tags=["candidate-flow"])
 app.include_router(email_intake.router, prefix="/api/email-intake", tags=["email-intake"])
+app.include_router(public_apply.router, prefix="/api/public", tags=["public-apply"])
+app.include_router(scheduling.router, prefix="/api/scheduling", tags=["scheduling"])
+app.include_router(applications.router, prefix="/api/applications", tags=["applications"])
+app.include_router(media.router, prefix="/api/media", tags=["media"])
+
 
 # Uploaded interview recordings (data/uploads/<session_id>/<file>) are served
-# back at /media/uploads/... so the recruiter's Reports page can play or
-# download them even when the central server runs on a different machine.
+# back through signed URLs so only authenticated recruiters can load them,
+# even when the central server runs on a different machine.
 MEDIA_DIR = Path(__file__).parent.parent / "data" / "uploads"
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
+
+
+@app.get("/media/{path:path}")
+def media_file(request: Request, path: str):
+    """Signed media route: /media/{path}?sig=...&exp=..."""
+    sig = request.query_params.get("sig", "")
+    exp = request.query_params.get("exp", "")
+    return media.serve_media_file(path, sig=sig, exp=exp)
 
 
 @app.get("/health")

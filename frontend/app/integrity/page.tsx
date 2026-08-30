@@ -1,11 +1,12 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
 import { api } from "@/lib/api"
 import { formatDate } from "@/lib/utils"
 import type { IntegrityFlag } from "@/lib/types"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   Table,
   TableBody,
@@ -28,13 +29,21 @@ function formatFlagType(s: string): string {
 export default function IntegrityPage() {
   const [flags, setFlags] = useState<IntegrityFlag[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    api.getIntegrityFlags()
-      .then(setFlags)
-      .catch(() => {})
-      .finally(() => setLoading(false))
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      setFlags(await api.getIntegrityFlags())
+    } catch (err: any) {
+      setError(err.message || "Failed to load integrity flags")
+    } finally {
+      setLoading(false)
+    }
   }, [])
+
+  useEffect(() => { load() }, [load])
 
   const highCount = flags.filter((f) => f.severity === "high").length
   const mediumCount = flags.filter((f) => f.severity === "medium").length
@@ -50,6 +59,11 @@ export default function IntegrityPage() {
 
         {loading ? (
           <div className="py-16 text-center text-sm text-muted-foreground">Loading...</div>
+        ) : error ? (
+          <div className="py-16 text-center">
+            <p className="text-sm text-destructive">{error}</p>
+            <Button variant="outline" className="mt-4" onClick={load}>Retry</Button>
+          </div>
         ) : (
           <>
             <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-4">

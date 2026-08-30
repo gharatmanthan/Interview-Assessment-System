@@ -1,8 +1,9 @@
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, UploadFile, File
 from fastapi.responses import FileResponse
+from api.deps import get_current_recruiter, require_interview_session
 from api.schemas import SessionCreate, SessionResponse
 from app.core import db
 from app.core.models import InterviewSession
@@ -20,6 +21,13 @@ UPLOADS_DIR = Path(__file__).parent.parent.parent / "data" / "uploads"
 # a low-stakes preview (the permanent recording goes to UPLOADS_DIR), so no
 # atomic-replace dance is needed here.
 LIVE_FRAMES_DIR = Path(__file__).parent.parent.parent / "data" / "live_frames"
+
+# Upload hardening: recordings (video+audio together) may legitimately be tens
+# of megabytes for a long interview; cap each file and the combined total so an
+# accidental giant upload can't exhaust disk. Live frames are one small JPEG.
+MAX_RECORDING_FILE_BYTES = 256 * 1024 * 1024
+MAX_RECORDING_TOTAL_BYTES = 512 * 1024 * 1024
+MAX_LIVE_FRAME_BYTES = 2 * 1024 * 1024
 
 SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]")
 
@@ -45,12 +53,13 @@ def delete_live_frame(session_id: str) -> None:
 
 
 @router.get("", response_model=list[SessionResponse])
-def list_sessions():
-    return db.get_all_sessions()
+def list_sessions(username: str = Depends(get_current_recruiter)):
+    """Owned sessions only (derived from the candidate's job ownership)."""
+    return db.get_owned_sessions(username)
 
 
 @router.post("", response_model=SessionResponse)
-def create_session(req: SessionCreate):
+def create_session(req: SessionCreate, username: str = Depends(get_current_recruiter)):
     session = InterviewSession(
         session_id=req.session_id,
         candidate_name=req.candidate_name,
@@ -72,6 +81,7 @@ async def upload_recording(
     session_id: str,
     video: UploadFile | None = File(default=None),
     audio: UploadFile | None = File(default=None),
+    x_interview_token: str = Header(default=""),
 ):
     """Accept a candidate's locally recorded webcam/mic files.
 
@@ -79,7 +89,11 @@ async def upload_recording(
     file has to travel to the central server explicitly — there is no shared
     disk for the API to read from. Works identically against the local
     sidecar in local mode.
+
+    Authenticated by the candidate's X-Interview-Token; the session must
+    belong to that candidate.
     """
+    require_interview_session(session_id, x_interview_token)
     if video is None and audio is None:
         raise HTTPException(status_code=400, detail="No file provided (expected 'video' and/or 'audio')")
 
@@ -88,10 +102,15 @@ async def upload_recording(
     if not session:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
 
-    target_dir = UPLOADS_DIR / session_id
+    # The session id comes off the URL — neutralize traversal before it can
+    # escape data/uploads/ and keep the stored rel path consistent with the
+    # on-disk directory.
+    safe_session = SAFE_FILENAME.sub("_", session_id)
+    target_dir = UPLOADS_DIR / safe_session
     target_dir.mkdir(parents=True, exist_ok=True)
 
     saved_fields: dict[str, str] = {}
+    total_size = 0
 
     for field, upload in (("video_path", video), ("audio_path", audio)):
         if upload is None:
@@ -101,10 +120,18 @@ async def upload_recording(
         with open(dest, "wb") as f:
             while chunk := await upload.read(1024 * 1024):
                 size += len(chunk)
+                total_size += len(chunk)
+                if size > MAX_RECORDING_FILE_BYTES or total_size > MAX_RECORDING_TOTAL_BYTES:
+                    f.close()
+                    dest.unlink(missing_ok=True)
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Recording exceeds the upload size limit.",
+                    )
                 f.write(chunk)
         if size == 0:
             continue
-        rel_path = f"{session_id}/{dest.name}"
+        rel_path = f"{safe_session}/{dest.name}"
         saved_fields[field] = rel_path
 
     if not saved_fields:
@@ -115,7 +142,11 @@ async def upload_recording(
 
 
 @router.post("/{session_id}/live-frame")
-async def upload_live_frame(session_id: str, request: Request):
+async def upload_live_frame(
+    session_id: str,
+    request: Request,
+    x_interview_token: str = Header(default=""),
+):
     """Accept one preview frame (raw JPEG body) from the candidate's app.
 
     Called every ~1.5s while their interview is in progress. Deliberately
@@ -123,10 +154,16 @@ async def upload_live_frame(session_id: str, request: Request):
     this is fire-and-forget from the client, and a late frame arriving just
     after completion must be silently tolerated (it merely recreates the
     file, which a later sweep or the recruiter's poll cycle ignores).
+
+    Authenticated by the candidate's X-Interview-Token; the session must
+    belong to that candidate.
     """
+    require_interview_session(session_id, x_interview_token)
     body = await request.body()
     if not body:
         raise HTTPException(status_code=400, detail="Empty frame body")
+    if len(body) > MAX_LIVE_FRAME_BYTES:
+        raise HTTPException(status_code=413, detail="Live frame exceeds size limit")
 
     dest = live_frame_path(session_id)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -141,7 +178,7 @@ async def upload_live_frame(session_id: str, request: Request):
 
 
 @router.get("/{session_id}/live-frame")
-def get_live_frame(session_id: str):
+def get_live_frame(session_id: str, username: str = Depends(get_current_recruiter)):
     path = live_frame_path(session_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="No live frame for session")

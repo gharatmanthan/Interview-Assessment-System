@@ -1,9 +1,9 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { api } from "@/lib/api"
-import type { DashboardStats, JobPosting } from "@/lib/types"
+import type { DashboardStats, JobPosting, JobPipelineStat } from "@/lib/types"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -14,34 +14,42 @@ import {
   AlertTriangle,
   Users,
   Briefcase,
+  FileText,
+  MailWarning,
 } from "lucide-react"
 import { EmptyState } from "@/components/empty-state"
 
 export default function DashboardPage() {
   const router = useRouter()
   const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [pipeline, setPipeline] = useState<JobPipelineStat[]>([])
   const [jobs, setJobs] = useState<JobPosting[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [username, setUsername] = useState<string | null>(null)
 
   useEffect(() => {
     setUsername(localStorage.getItem("username"))
   }, [])
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const [s, j] = await Promise.all([api.getDashboardStats(), api.getJobs()])
-        setStats(s)
-        setJobs(j)
-      } catch (err) {
-        console.error("Failed to load dashboard:", err)
-      } finally {
-        setLoading(false)
-      }
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const [s, p, j] = await Promise.all([api.getDashboardStats(), api.getApplicationStats(), api.getJobs()])
+      setStats(s)
+      setPipeline(p.jobs ?? [])
+      setJobs(j)
+    } catch (err: any) {
+      setError(err.message || "Failed to load dashboard")
+    } finally {
+      setLoading(false)
     }
-    load()
   }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
 
   if (loading) {
     return (
@@ -51,12 +59,25 @@ export default function DashboardPage() {
     )
   }
 
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <p className="text-sm text-destructive">{error}</p>
+        <Button variant="outline" onClick={load}>Retry</Button>
+      </div>
+    )
+  }
+
+  const pipeTotal =
+    pipeline.reduce((s, j) => s + j.applications, 0) +
+    pipeline.reduce((s, j) => s + j.interviews_completed, 0)
+
   const total = stats
     ? (stats.interviews_conducted ?? 0) +
       Object.values(stats.candidates_by_status).reduce((a, b) => a + b, 0)
     : 0
 
-  if (total === 0 && !loading) {
+  if (total === 0 && pipeTotal === 0 && !loading) {
     return (
       <div className="mt-12">
         <EmptyState
@@ -123,6 +144,52 @@ export default function DashboardPage() {
         <p className="text-sm leading-relaxed text-muted-foreground mt-1">
           Welcome back{username ? `, ${username}` : ""}
         </p>
+      </div>
+
+      <div className="rounded-xl border bg-card p-5">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h2 className="text-lg font-semibold text-foreground flex items-center gap-2">
+              <FileText className="h-4 w-4 text-primary" /> Screening Pipeline
+            </h2>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Applicants by stage across all of your job postings
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => router.push("/applications")}>
+            View applications
+          </Button>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {[
+            { label: "Applications", value: pipeline.reduce((s, j) => s + j.applications, 0), tone: "text-foreground" as const },
+            { label: "Shortlisted", value: pipeline.reduce((s, j) => s + j.shortlisted, 0), tone: "text-emerald-600" as const },
+            { label: "Invites Sent", value: pipeline.reduce((s, j) => s + j.invites_sent, 0), tone: "text-foreground" as const },
+            { label: "Interviews Completed", value: pipeline.reduce((s, j) => s + j.interviews_completed, 0), tone: "text-primary" as const },
+          ].map(({ label, value, tone }) => (
+            <div key={label} className="rounded-lg border border-border bg-background/50 px-4 py-3">
+              <p className={`text-2xl font-bold ${tone}`}>{value}</p>
+              <p className="text-[11px] text-muted-foreground">{label}</p>
+            </div>
+          ))}
+        </div>
+        {(pipeline.reduce((s, j) => s + j.screening_pending, 0) > 0 ||
+          pipeline.reduce((s, j) => s + j.manual_review, 0) > 0 ||
+          pipeline.reduce((s, j) => s + j.email_failures, 0) > 0) && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {pipeline.reduce((s, j) => s + j.screening_pending, 0) > 0 && (
+              <Badge variant="secondary" className="text-xs">Pending screening: {pipeline.reduce((s, j) => s + j.screening_pending, 0)}</Badge>
+            )}
+            {pipeline.reduce((s, j) => s + j.manual_review, 0) > 0 && (
+              <Badge variant="warning" className="text-xs">Manual review: {pipeline.reduce((s, j) => s + j.manual_review, 0)}</Badge>
+            )}
+            {pipeline.reduce((s, j) => s + j.email_failures, 0) > 0 && (
+              <Badge variant="destructive" className="text-xs flex items-center gap-1">
+                <MailWarning className="h-3 w-3" /> Email failures: {pipeline.reduce((s, j) => s + j.email_failures, 0)}
+              </Badge>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">

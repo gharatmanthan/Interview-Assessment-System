@@ -31,6 +31,7 @@ const statusConfig: Record<string, { label: string; variant: "default" | "second
 const sourceConfig: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" | "success" | "warning" }> = {
   manual: { label: "Manual", variant: "outline" },
   email_auto: { label: "Auto (Email)", variant: "default" },
+  apply_portal: { label: "Apply Portal", variant: "secondary" },
 }
 
 const screeningConfig: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" | "success" | "warning" }> = {
@@ -54,6 +55,8 @@ export default function CandidatesPage() {
 
   const [revokeTarget, setRevokeTarget] = useState<Candidate | null>(null)
   const [revokeLoading, setRevokeLoading] = useState(false)
+
+  const [detailTarget, setDetailTarget] = useState<Candidate | null>(null)
 
   const [uploadingId, setUploadingId] = useState<string | null>(null)
   const [checkingJobs, setCheckingJobs] = useState<Record<string, boolean>>({})
@@ -79,6 +82,11 @@ export default function CandidatesPage() {
   function getJobTitle(jobId: string): string {
     return jobs.find((j) => j.job_id === jobId)?.title ?? jobId
   }
+
+  // Default sort: ATS/resume match score descending, unscored rows last.
+  const sortedCandidates = candidates
+    .map((c) => c)
+    .sort((a, b) => (b.match_score ?? -1) - (a.match_score ?? -1))
 
   async function handleInvite(e: React.FormEvent) {
     e.preventDefault()
@@ -247,7 +255,7 @@ export default function CandidatesPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {candidates.map((c) => (
+                  {sortedCandidates.map((c) => (
                     <CandidateRow
                       key={c.candidate_id}
                       candidate={c}
@@ -257,6 +265,7 @@ export default function CandidatesPage() {
                       onResend={handleResend}
                       onFileSelect={handleFileSelect}
                       onRevoke={setRevokeTarget}
+                      onDetail={setDetailTarget}
                     />
                   ))}
                 </TableBody>
@@ -446,6 +455,100 @@ export default function CandidatesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={!!detailTarget} onOpenChange={(open) => { if (!open) setDetailTarget(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Why shortlisted?</DialogTitle>
+            <DialogDescription>
+              {detailTarget?.name} · {getJobTitle(detailTarget?.job_id ?? "")}
+            </DialogDescription>
+          </DialogHeader>
+          {detailTarget?.screening_result ? (
+            <div className="max-h-[60vh] space-y-4 overflow-y-auto pr-1">
+              <div className="flex flex-wrap items-center gap-2 rounded-lg bg-muted/60 px-3 py-2">
+                <Badge variant={detailTarget.screening_result.decision === "passed" ? "success" : "warning"}>
+                  {detailTarget.screening_result.decision}
+                </Badge>
+                <span className="text-xs leading-relaxed text-muted-foreground">
+                  {detailTarget.screening_result.decision_reason}
+                </span>
+              </div>
+
+              <ScoreBar label="ATS score (0–100)" value={detailTarget.screening_result.ats_score ?? 0}
+                        threshold={detailTarget.screening_result.threshold_used ?? undefined} highlight />
+              {(["skills", "experience", "semantic", "education", "keyword"] as const).map((key) => {
+                const value = detailTarget.screening_result?.[key === "skills" ? "skills_score"
+                  : key === "experience" ? "experience_score"
+                  : key === "semantic" ? "semantic_score"
+                  : key === "education" ? "education_score"
+                  : "keyword_score"] as number | null | undefined
+                return <ScoreBar key={key} label={`${key[0].toUpperCase()}${key.slice(1)}`} value={value ?? 0} />
+              })}
+
+              <div>
+                <p className="mb-1 text-xs font-medium text-muted-foreground">Hard requirements</p>
+                {detailTarget.screening_result.hard_requirements_passed ? (
+                  <span className="text-xs text-emerald-600">All hard gates cleared</span>
+                ) : (
+                  <ul className="space-y-1">
+                    {detailTarget.screening_result.hard_requirement_failures.map((f) => (
+                      <li key={f} className="flex items-start gap-1.5 text-xs text-destructive">
+                        <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" /> {f}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {detailTarget.screening_result.matched_skills.length > 0 && (
+                  <div>
+                    <p className="mb-1 text-xs font-medium text-muted-foreground">Matched skills</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {detailTarget.screening_result.matched_skills.map((s) => (
+                        <Badge key={s} variant="success" className="text-[10px]">{s}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {detailTarget.screening_result.missing_skills.length > 0 && (
+                  <div>
+                    <p className="mb-1 text-xs font-medium text-muted-foreground">Missing skills</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {detailTarget.screening_result.missing_skills.map((s) => (
+                        <Badge key={s} variant="destructive" className="text-[10px]">{s}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Invited manually — no automated screening decision was generated for this candidate.
+            </p>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+function ScoreBar({ label, value, threshold, highlight }: { label: string; value: number; threshold?: number; highlight?: boolean }) {
+  const pct = Math.min(100, Math.max(0, value))
+  const color = !highlight ? "bg-primary" : value >= (threshold ?? 60) ? "bg-emerald-500" : "bg-amber-500"
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between">
+        <p className="text-xs font-medium text-muted-foreground">{label}</p>
+        <span className="text-xs font-semibold text-foreground">
+          {Math.round(value)}{threshold != null ? ` / ${threshold}` : ""}
+        </span>
+      </div>
+      <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+        <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${pct}%` }} />
+      </div>
     </div>
   )
 }
@@ -458,6 +561,7 @@ interface CandidateRowProps {
   onResend: (candidate: Candidate) => void
   onFileSelect: (candidateId: string, file: File) => void
   onRevoke: (candidate: Candidate) => void
+  onDetail: (candidate: Candidate) => void
 }
 
 function CandidateRow({
@@ -468,6 +572,7 @@ function CandidateRow({
   onResend,
   onFileSelect,
   onRevoke,
+  onDetail,
 }: CandidateRowProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const isUploading = uploadingId === c.candidate_id
@@ -540,6 +645,11 @@ function CandidateRow({
       </TableCell>
       <TableCell>
         <div className="flex items-center justify-end gap-1">
+          {c.screening_result && (
+            <Button variant="ghost" size="sm" className="h-8" title="Why shortlisted?" onClick={() => onDetail(c)}>
+              <Info className="h-4 w-4 mr-1.5" /> Why
+            </Button>
+          )}
           <Button variant="ghost" size="icon" className="h-8 w-8" title="Copy invite code" onClick={() => onCopyCode(c.invite_code)}>
             <Copy className="h-4 w-4" />
           </Button>

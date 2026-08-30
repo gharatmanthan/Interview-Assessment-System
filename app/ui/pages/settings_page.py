@@ -152,7 +152,9 @@ class SettingsPage(QWidget):
         provider_idx = self.provider_combo.findText(s["llm_provider"])
         if provider_idx >= 0:
             self.provider_combo.setCurrentIndex(provider_idx)
-        self.api_key_input.setText(s["llm_api_key"])
+        # API keys are never loaded into the UI nor re-persisted — the model
+        # key is read exclusively from the server environment (GROQ_API_KEY).
+        self.api_key_input.setText("")
         self.export_dir_input.setText(s["export_dir"])
 
     def _save(self):
@@ -160,7 +162,7 @@ class SettingsPage(QWidget):
             "camera_index": self.camera_combo.currentData(),
             "mic_device": self.mic_combo.currentData(),
             "llm_provider": self.provider_combo.currentText(),
-            "llm_api_key": self.api_key_input.text(),
+            "llm_api_key": "",
             "export_dir": self.export_dir_input.text(),
         })
         QMessageBox.information(self, "Settings saved", "Your settings have been saved.")

@@ -28,7 +28,7 @@ def make_candidate(candidate_id="cand-1", job_id="job-1", invite_code="CODE123")
         candidate_id=candidate_id,
         job_id=job_id,
         name="Jane Doe",
-        email="jane@example.com",
+        email=f"{candidate_id}@example.com",
         invite_code=invite_code,
     )
 
@@ -255,6 +255,52 @@ def test_fairness_flag_join_includes_session_info(fresh_db):
     assert len(rows) == 1
     assert rows[0]["score_delta"] == -6.2
     assert rows[0]["candidate_name"] == "Jane"
+
+
+def test_duplicate_submit_upserts_competency_score(fresh_db):
+    """Recruiters route /scoring/run and candidates /submit-answer can fire for
+    the same (session, question) when a retry occurs. One row per
+    (session_id, question_id) must be kept, not a growing pile of duplicates,
+    and the latest score must win."""
+    from app.core.models import CompetencyScore
+
+    fresh_db.save_competency_score(CompetencyScore(
+        session_id="sess-1", question_id="q1", category="DSA", score=60.0, confidence=0.5,
+    ))
+    fresh_db.save_competency_score(CompetencyScore(
+        session_id="sess-1", question_id="q1", category="DSA", score=90.0, confidence=0.9,
+    ))
+    rows = fresh_db.get_session_scores("sess-1")
+    assert len(rows) == 1
+    assert rows[0]["score"] == 90.0
+
+
+def test_duplicate_submit_upserts_explanation(fresh_db):
+    from app.core.models import ExplanationItem
+
+    fresh_db.save_explanation(ExplanationItem(
+        session_id="sess-1", question_id="q1", summary="old", supporting_phrases=["a"],
+    ))
+    fresh_db.save_explanation(ExplanationItem(
+        session_id="sess-1", question_id="q1", summary="new", supporting_phrases=["a", "b"],
+    ))
+    rows = fresh_db.get_session_explanations("sess-1")
+    assert len(rows) == 1
+    assert rows[0]["summary"] == "new"
+
+
+def test_duplicate_submit_upserts_fairness_flag(fresh_db):
+    from app.core.models import FairnessFlag
+
+    fresh_db.save_fairness_flag(FairnessFlag(
+        session_id="sess-1", question_id="q1", score_delta=0.0, note="old",
+    ))
+    fresh_db.save_fairness_flag(FairnessFlag(
+        session_id="sess-1", question_id="q1", score_delta=-5.5, note="new",
+    ))
+    rows = [r for r in fresh_db.get_all_fairness_flags() if r["session_id"] == "sess-1"]
+    assert len(rows) == 1
+    assert rows[0]["score_delta"] == -5.5
 
 
 # --- candidate accounts (teammate login flow) ---

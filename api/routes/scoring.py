@@ -1,6 +1,7 @@
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from api.deps import get_current_recruiter
 from api.schemas import ScoringRequest, ScoringResult, CompetencyScoreResponse, ExplanationResponse, FairnessFlagResponse
 from app.engine.scoring import get_ml_score, score_answer
 from app.engine.explainability import explain_score
@@ -25,7 +26,7 @@ def _job_context(session_id: str) -> tuple:
 
 
 @router.post("/run", response_model=ScoringResult)
-def run_scoring(req: ScoringRequest):
+def run_scoring(req: ScoringRequest, username: str = Depends(get_current_recruiter)):
     # Ground rubric retrieval in the ACTUAL job description when the session
     # links to one; falls back to static category rubric otherwise.
     job_title, jd_text = _job_context(req.session_id)

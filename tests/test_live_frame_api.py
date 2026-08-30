@@ -1,14 +1,45 @@
 """Live-monitor frame upload/serve API + completion cleanup."""
 import pytest
 
+from app.core import db
+
 
 @pytest.fixture
-def client(fresh_db):
-    from fastapi.testclient import TestClient
-    from api.main import app
+def cc(fresh_db, public_client):
+    """Candidate-client sponsor: seeds an invited candidate, validates the
+    invite, and starts a session so every candidate-scoring endpoint has a
+    valid X-Interview-Token."""
 
-    with TestClient(app) as test_client:
-        yield test_client
+    def _sponsor(session_id="sess-live"):
+        import uuid
+
+        from app.core.models import Candidate, InterviewInvite, JobPosting
+
+        uid = uuid.uuid4().hex[:8]
+        cid = f"cand-{uid}"
+        code = f"cam{uid}"
+        db.save_job_posting(JobPosting(
+            job_id="job-cam", title="Cam Engineer", description="d",
+            required_skills=["python"], experience_level="Junior", department="Eng",
+            created_by="recruiter",
+        ))
+        db.save_candidate(Candidate(
+            candidate_id=cid, job_id="job-cam", name=f"Cam {uid}",
+            email=f"{uid}@example.com", invite_code=code, status="invited",
+        ))
+        db.create_interview_invite(InterviewInvite(
+            candidate_id=cid, job_id="job-cam", application_id=None,
+            token=f"cam-invite-{uid}",
+        ))
+        v = public_client.post("/api/candidate/validate-code", json={"invite_code": code})
+        token = v.json()["interview_token"]
+        r = public_client.post("/api/candidate/start-session", json={
+            "session_id": session_id, "interview_token": token,
+        })
+        assert r.status_code == 200
+        return token
+
+    return _sponsor
 
 
 @pytest.fixture
@@ -25,15 +56,15 @@ JPEG_B = b"\xff\xd8fake-jpeg-bytes-b\xff\xd9"
 
 
 class TestLiveFrameEndpoints:
-    def test_get_before_first_frame_404s(self, client, frames_dir):
-        res = client.get("/api/sessions/session-x/live-frame")
-        assert res.status_code == 404
+    def test_get_requires_recruiter_auth(self, public_client):
+        assert public_client.get("/api/sessions/session-x/live-frame").status_code == 401
 
-    def test_upload_then_get_roundtrip(self, client, frames_dir):
-        res = client.post(
+    def test_upload_then_get_roundtrip(self, public_client, client, frames_dir, cc):
+        token = cc("session-x")
+        res = public_client.post(
             "/api/sessions/session-x/live-frame",
             content=JPEG_A,
-            headers={"Content-Type": "image/jpeg"},
+            headers={"Content-Type": "image/jpeg", "X-Interview-Token": token},
         )
         assert res.status_code == 200
 
@@ -42,30 +73,42 @@ class TestLiveFrameEndpoints:
         assert got.headers["content-type"] == "image/jpeg"
         assert got.content == JPEG_A
 
-    def test_new_frame_overwrites_previous(self, client, frames_dir):
-        client.post("/api/sessions/session-x/live-frame", content=JPEG_A)
-        client.post("/api/sessions/session-x/live-frame", content=JPEG_B)
+    def test_new_frame_overwrites_previous(self, public_client, client, frames_dir, cc):
+        token = cc("session-x")
+        public_client.post("/api/sessions/session-x/live-frame", content=JPEG_A,
+                           headers={"X-Interview-Token": token})
+        public_client.post("/api/sessions/session-x/live-frame", content=JPEG_B,
+                           headers={"X-Interview-Token": token})
         assert client.get("/api/sessions/session-x/live-frame").content == JPEG_B
 
-    def test_sessions_are_isolated(self, client, frames_dir):
-        client.post("/api/sessions/sess-1/live-frame", content=JPEG_A)
-        client.post("/api/sessions/sess-2/live-frame", content=JPEG_B)
+    def test_sessions_are_isolated(self, public_client, client, frames_dir, cc):
+        token_a = cc("sess-1")
+        public_client.post("/api/sessions/sess-1/live-frame", content=JPEG_A,
+                           headers={"X-Interview-Token": token_a})
+        # second candidate for a different session
+        token_b = cc("sess-2")
+        public_client.post("/api/sessions/sess-2/live-frame", content=JPEG_B,
+                           headers={"X-Interview-Token": token_b})
         assert client.get("/api/sessions/sess-1/live-frame").content == JPEG_A
         assert client.get("/api/sessions/sess-2/live-frame").content == JPEG_B
 
-    def test_empty_body_rejected(self, client, frames_dir):
-        assert client.post("/api/sessions/session-x/live-frame", content=b"").status_code == 400
+    def test_empty_body_rejected(self, public_client, cc):
+        token = cc("session-x")
+        assert public_client.post(
+            "/api/sessions/session-x/live-frame", content=b"",
+            headers={"X-Interview-Token": token},
+        ).status_code == 400
 
-    def test_path_traversal_in_session_id_is_neutralized(self, client, frames_dir):
-        # Router may reject encoded slashes outright (404); if the request ever
-        # reaches the handler, the sanitizer must neutralize traversal. Either
-        # way nothing may be written outside LIVE_FRAMES_DIR.
-        res = client.post(
+    def test_path_traversal_in_session_id_is_neutralized(self, public_client, frames_dir):
+        # If the request ever reaches the handler, the sanitizer must neutralize
+        # traversal; anything else is rejected upstream. Either way nothing may
+        # be written outside LIVE_FRAMES_DIR.
+        res = public_client.post(
             "/api/sessions/..%2F..%2Fevil/live-frame",
             content=JPEG_A,
             headers={"Content-Type": "image/jpeg"},
         )
-        assert res.status_code in (200, 404)
+        assert res.status_code in (401, 404)
         assert all(p.name.endswith(".jpg") for p in frames_dir.rglob("*"))
 
     def test_live_frame_path_helper_contains_traversal(self, frames_dir):
@@ -77,26 +120,28 @@ class TestLiveFrameEndpoints:
 
 
 class TestCleanupOnCompletion:
-    def test_complete_session_deletes_live_frame(self, client, frames_dir):
-        client.post(
-            "/api/candidate/start-session",
-            json={"session_id": "sess-live", "candidate_id": "c1", "job_id": "j1"},
-        )
-        client.post("/api/sessions/sess-live/live-frame", content=JPEG_A)
+    def test_complete_session_deletes_live_frame(self, public_client, client, frames_dir, cc):
+        token = cc("sess-live")
+        public_client.post("/api/sessions/sess-live/live-frame", content=JPEG_A,
+                           headers={"X-Interview-Token": token})
         assert (frames_dir / "sess-live.jpg").exists()
 
-        client.post("/api/candidate/complete-session", json={"session_id": "sess-live"})
+        public_client.post("/api/candidate/complete-session", json={
+            "session_id": "sess-live", "interview_token": token,
+        })
         assert not (frames_dir / "sess-live.jpg").exists()
         assert client.get("/api/sessions/sess-live/live-frame").status_code == 404
 
-    def test_late_frame_after_completion_recreates_file_without_crash(self, client, frames_dir):
-        """A frame arriving just after completion must not error; plain
+    def test_late_frame_after_completion_with_valid_token_recreates_file(self, public_client, frames_dir, cc):
+        """A frame arriving just after completion (from the still-running
+        candidate app, which holds a valid token) must not error; plain
         overwrite semantics mean the file simply reappears and will be
         removed by the next poll cycle's stale sweep — acceptable per spec.
         """
-        res = client.post(
+        token = cc("sess-late")
+        res = public_client.post(
             "/api/sessions/sess-late/live-frame",
             content=JPEG_A,
-            headers={"Content-Type": "image/jpeg"},
+            headers={"Content-Type": "image/jpeg", "X-Interview-Token": token},
         )
         assert res.status_code == 200

@@ -3,16 +3,64 @@ import * as path from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import * as http from 'http';
 import * as net from 'net';
+import * as fs from 'fs';
 import { loadConfig, needsSetup, saveConfig, AppConfig } from './config';
 import { runLocalScan } from './integrity';
 
 let mainWindow: BrowserWindow | null = null;
 let pythonProcess: ChildProcess | null = null;
+let frontendServer: http.Server | null = null;
+let startInFlight = false;
 
 const isDev = process.argv.includes('--dev');
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
+const STATIC_ROOT = path.join(PROJECT_ROOT, 'frontend', 'out');
 const MAX_POLL_ATTEMPTS = 30;
 const POLL_INTERVAL_MS = 500;
+
+/**
+ * In a packaged app (extraResources) the Python sidecar lives under
+ * process.resourcesPath (api/, app/, data/) rather than the repo layout
+ * PROJECT_ROOT used in dev. Returning the resources dir here lets us point
+ * cwd/PYTHONPATH and the static root at real, unpacked locations on disk.
+ * In dev/from-source we fall back to the repository root.
+ */
+function packagedRoot(): string {
+  return process.resourcesPath || PROJECT_ROOT;
+}
+
+/**
+ * True when the process is running from a packaged electron-builder bundle.
+ * extraResources files are placed under resources/, not the repo layout.
+ */
+function isPackaged(): boolean {
+  return !!(process.resourcesPath
+    && fs.existsSync(path.join(process.resourcesPath, 'api', 'main.py')));
+}
+
+const MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json',
+  '.txt': 'text/plain; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.wasm': 'application/wasm',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.map': 'application/json',
+};
 
 function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -66,6 +114,67 @@ function killPythonProcess(): void {
 }
 
 /**
+ * Serve the exported (static) Next.js build over loopback HTTP.
+ *
+ * `loadFile(index.html)` breaks client-side routing — deep links like /jobs
+ * or /reports fail because there is no server to apply the SPA fallback. This
+ * serves ./frontend/out on a random 127.0.0.1 port with a MIME map and an
+ * index.html fallback for anything that is not a real static asset, plus a
+ * canonical `<base>`-independent location for fetch() relative to origin.
+ */
+function serveFrontend(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const root = path.resolve(STATIC_ROOT);
+    const server = http.createServer((req, res) => {
+      try {
+        if (!req.url) {
+          res.writeHead(400).end('Bad Request');
+          return;
+        }
+        const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+        const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+        // Keep any request inside the exported build — no escaping via ../
+        const filePath = path.resolve(root, rel);
+        if (filePath !== root && !filePath.startsWith(root + path.sep)) {
+          res.writeHead(403).end('Forbidden');
+          return;
+        }
+        if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+          const data = fs.readFileSync(filePath);
+          res.writeHead(200, {
+            'Content-Type': MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream',
+          });
+          res.end(data);
+          return;
+        }
+        // SPA fallback: unknown paths are client-side routes.
+        const index = path.join(root, 'index.html');
+        if (fs.existsSync(index)) {
+          res.writeHead(200, { 'Content-Type': MIME_TYPES['.html'] });
+          res.end(fs.readFileSync(index));
+          return;
+        }
+        res.writeHead(404).end('Not Found');
+      } catch {
+        res.writeHead(500).end('Internal Server Error');
+      }
+    });
+
+    server.on('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (address && typeof address === 'object') {
+        frontendServer = server;
+        resolve(`http://127.0.0.1:${address.port}`);
+      } else {
+        server.close();
+        reject(new Error('Failed to start frontend static server'));
+      }
+    });
+  });
+}
+
+/**
  * Where should the frontend send shared-data requests?
  *
  * - local mode: the FastAPI sidecar spawned below, on a random loopback port
@@ -84,8 +193,18 @@ async function resolveApiBaseUrl(config: AppConfig): Promise<{ baseUrl: string; 
   const port = await getFreePort();
   console.log(`Starting backend on port ${port}...`);
 
+  // In a packaged app the Python source is unpacked under resourcesPath (via
+  // extraResources). Point cwd + PYTHONPATH there so `python -m api.main`
+  // resolves api/ and app/ — app.asar is virtual and cannot be cwd.
+  const backendRoot = isPackaged() ? process.resourcesPath! : PROJECT_ROOT;
+
   pythonProcess = spawn('python', ['-m', 'api.main', '--port', String(port)], {
-    cwd: PROJECT_ROOT,
+    cwd: backendRoot,
+    env: {
+      ...process.env,
+      PYTHONPATH: backendRoot,
+      INTERVIEWIQ_PACKAGED: isPackaged() ? '1' : '0',
+    },
     stdio: 'inherit',
   });
 
@@ -145,6 +264,13 @@ function registerIpc(): void {
 }
 
 async function startApp(): Promise<void> {
+  // Guard against concurrent starts (whenReady + activate + restart-window can
+  // fire close together) which would otherwise spawn multiple Python sidecars
+  // and leak static servers on top of each other.
+  if (startInFlight) {
+    return;
+  }
+  startInFlight = true;
   try {
     const config = loadConfig();
     console.log(`Backend mode: ${config.backendMode}${config.remoteApiUrl ? ` (${config.remoteApiUrl})` : ''}`);
@@ -161,21 +287,42 @@ async function startApp(): Promise<void> {
     if (isDev) {
       mainWindow.loadURL('http://localhost:3000');
     } else {
-      mainWindow.loadFile(path.join(PROJECT_ROOT, 'frontend', 'out', 'index.html'));
+      const frontendUrl = await serveFrontend();
+      mainWindow.loadURL(frontendUrl);
     }
   } catch (err) {
     console.error('Failed to start application:', err);
     app.quit();
+  } finally {
+    startInFlight = false;
   }
 }
 
-app.whenReady().then(() => {
-  registerIpc();
-  startApp();
-});
+// Prevent a second app instance from spawning its own Python sidecar and
+// fighting over the same settings/data files.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+
+  app.whenReady().then(() => {
+    registerIpc();
+    startApp();
+  });
+}
 
 app.on('will-quit', () => {
   killPythonProcess();
+  if (frontendServer) {
+    frontendServer.close();
+    frontendServer = null;
+  }
 });
 
 app.on('window-all-closed', () => {

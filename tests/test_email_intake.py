@@ -2,6 +2,8 @@
 Tests for the email intake pipeline (app/engine/email_intake.py).
 
 All Gmail API calls are mocked — no real Gmail access in automated tests.
+Intake stores the Application + queues screening; delivery happens via the
+notification outbox worker, never synchronously inside intake.
 """
 import base64
 from unittest.mock import MagicMock, patch
@@ -9,7 +11,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.core import db
-from app.core.models import JobPosting, Candidate
 
 
 # ---------------------------------------------------------------------------
@@ -18,9 +19,11 @@ from app.core.models import JobPosting, Candidate
 
 def _make_gmail_message(message_id, sender="Jane Applicant <jane@example.com>",
                         subject="Application for Backend Engineer",
-                        attachment_filename="resume.pdf", attachment_mime="application/pdf",
-                        attachment_data=b"fake resume content"):
+                        attachment_filename="resume.txt", attachment_mime="text/plain",
+                        attachment_data=None):
     """Build a mock Gmail API message response."""
+    if attachment_data is None:
+        attachment_data = _RESUME_TEXT.encode()
     att_body = base64.urlsafe_b64encode(attachment_data).decode()
     payload = {
         "headers": [
@@ -37,8 +40,16 @@ def _make_gmail_message(message_id, sender="Jane Applicant <jane@example.com>",
     return {"id": message_id, "payload": payload}
 
 
+_RESUME_TEXT = (
+    "Jane Doe\n"
+    "Backend engineer with python, sql and rest api experience. "
+    "5 years of experience. B.Tech in Computer Science.\n"
+)
+
+
 def _make_job(client, job_id="job-1", label="Applications/Backend",
-              threshold=60.0, description="We need python and sql skills."):
+              threshold=60.0, description="We need python and sql skills.",
+              min_exp=3):
     """Create a job posting with a Gmail label and screening threshold via the API."""
     client.post("/api/jobs", json={
         "job_id": job_id,
@@ -49,35 +60,25 @@ def _make_job(client, job_id="job-1", label="Applications/Backend",
         "department": "Engineering",
         "screening_threshold": threshold,
         "application_gmail_label": label,
+        "minimum_experience_years": min_exp,
     })
 
 
-def _mock_gmail_service(messages=None):
+def _mock_gmail_service(messages=None, msg=None):
     """Create a mock Gmail API service."""
     service = MagicMock()
     if messages is None:
         messages = []
     service.users().messages().list().execute.return_value = {"messages": messages}
+    if msg is not None:
+        service.users().messages().get().execute.return_value = msg
     return service
 
 
-def _mock_resume_data(skills=None, experience_years=3.0):
-    return {
-        "raw_text": "Jane Doe\nSkills: Python, SQL",
-        "skills": skills or ["python", "sql"],
-        "experience_years": experience_years,
-        "education": ["B.S. Computer Science"],
-    }
-
-
-def _mock_match_result(match_score=75.0, matched=None, missing=None):
-    return {
-        "match_score": match_score,
-        "matched_skills": matched or ["python", "sql"],
-        "missing_skills": missing or ["kubernetes"],
-        "fit_summary": "Strong match",
-        "matched_by": "keyword_overlap",
-    }
+def _run_check(job_id, tmp_path):
+    from app.engine.email_intake import check_for_new_applications
+    with patch("app.engine.email_intake.RESUME_DIR", tmp_path / "resumes"):
+        return check_for_new_applications(job_id)
 
 
 # ---------------------------------------------------------------------------
@@ -85,71 +86,70 @@ def _mock_match_result(match_score=75.0, matched=None, missing=None):
 # ---------------------------------------------------------------------------
 
 class TestEmailIntakePipeline:
-    """6 test cases covering the email intake pipeline."""
+    """Email intake -> application queued -> screening flushed synchronously."""
 
     @patch("app.engine.email_intake.get_gmail_service")
-    @patch("app.engine.email_intake.match_resume_to_jd")
-    @patch("app.engine.email_intake.parse_resume")
-    def test_new_email_above_threshold_creates_candidate_and_invites(
-        self, mock_parse, mock_match, mock_service_fn, client, fresh_db, tmp_path
+    def test_new_email_above_threshold_creates_application_and_queues_invite(
+        self, mock_service_fn, client, fresh_db, tmp_path
     ):
-        """Test 1: New email above threshold -> candidate created, invite sent, marked processed."""
         _make_job(client, threshold=60.0)
 
         msg = _make_gmail_message("msg-001")
-        service = _mock_gmail_service(messages=[{"id": "msg-001"}])
-        service.users().messages().get().execute.return_value = msg
+        service = _mock_gmail_service(messages=[{"id": "msg-001"}], msg=msg)
         mock_service_fn.return_value = service
-        mock_parse.return_value = _mock_resume_data()
-        mock_match.return_value = _mock_match_result(match_score=75.0)
 
-        with patch("app.engine.email_intake.RESUME_DIR", tmp_path / "resumes"), \
-             patch("app.engine.email_intake._download_attachment", return_value=b"fake resume"):
-            from app.engine.email_intake import check_for_new_applications
-            results = check_for_new_applications("job-1")
+        results = _run_check("job-1", tmp_path)
 
         assert len(results) == 1
         assert results[0]["status"] == "invited"
-        assert results[0]["match_score"] == 75.0
+        assert results[0]["candidate_id"]
+
+        applications = fresh_db.get_all_applications()
+        assert len(applications) == 1
+        assert applications[0]["screening_status"] == "completed"
 
         candidates = db.get_all_candidates()
         assert len(candidates) == 1
         assert candidates[0]["source"] == "email_auto"
         assert candidates[0]["screening_status"] == "passed_threshold"
-        assert candidates[0]["invite_email_sent"] is True
-        assert candidates[0]["match_score"] == 75.0
+        # Delivery is deferred: the outbox worker sends, not intake.
+        assert candidates[0]["invite_email_sent"] is False
+
+        candidate = candidates[0]
+        invites = fresh_db.get_interview_invites_for_candidate(candidate["candidate_id"])
+        assert len(invites) == 1
+        assert invites[0]["status"] == "active"
+
+        pending = fresh_db.get_pending_notifications()
+        assert [n["notification_type"] for n in pending] == ["interview_invite"]
+        assert pending[0]["recipient"] == "jane@example.com"
 
         assert db.is_email_processed("msg-001") is True
 
     @patch("app.engine.email_intake.get_gmail_service")
-    @patch("app.engine.email_intake.match_resume_to_jd")
-    @patch("app.engine.email_intake.parse_resume")
-    def test_new_email_below_threshold_creates_candidate_no_invite(
-        self, mock_parse, mock_match, mock_service_fn, client, fresh_db, tmp_path
+    def test_new_email_below_threshold_creates_no_candidate(
+        self, mock_service_fn, client, fresh_db, tmp_path
     ):
-        """Test 2: New email below threshold -> candidate created, no invite sent."""
-        _make_job(client, threshold=60.0)
+        _make_job(client, threshold=60.0, min_exp=99)  # hard requirement gate fails
 
         msg = _make_gmail_message("msg-002")
-        service = _mock_gmail_service(messages=[{"id": "msg-002"}])
-        service.users().messages().get().execute.return_value = msg
+        service = _mock_gmail_service(messages=[{"id": "msg-002"}], msg=msg)
         mock_service_fn.return_value = service
-        mock_parse.return_value = _mock_resume_data()
-        mock_match.return_value = _mock_match_result(match_score=30.0)
 
-        with patch("app.engine.email_intake.RESUME_DIR", tmp_path / "resumes"), \
-             patch("app.engine.email_intake._download_attachment", return_value=b"fake resume"):
-            from app.engine.email_intake import check_for_new_applications
-            results = check_for_new_applications("job-1")
+        results = _run_check("job-1", tmp_path)
 
         assert len(results) == 1
-        assert results[0]["status"] == "below_threshold"
-        assert results[0]["match_score"] == 30.0
+        assert results[0]["status"] == "not_shortlisted"
+        assert results[0]["candidate_id"] is None
 
-        candidates = db.get_all_candidates()
-        assert len(candidates) == 1
-        assert candidates[0]["screening_status"] == "below_threshold"
-        assert candidates[0]["invite_email_sent"] is False
+        applications = fresh_db.get_all_applications()
+        assert applications[0]["screening_status"] == "completed"
+        result = fresh_db.get_screening_result(applications[0]["application_id"])
+        assert result["decision"] in ("rejected", "manual_review")
+        assert result["hard_requirements_passed"] is False
+
+        assert db.get_all_candidates() == []
+        assert fresh_db.get_pending_notifications() == []
 
         assert db.is_email_processed("msg-002") is True
 
@@ -157,10 +157,8 @@ class TestEmailIntakePipeline:
     def test_no_valid_attachment_skips_and_does_not_crash_batch(
         self, mock_service_fn, client, fresh_db, tmp_path
     ):
-        """Test 3: Email with no valid attachment -> skipped, logged, doesn't crash."""
         _make_job(client)
 
-        # Message with no attachment parts
         msg_no_attach = _make_gmail_message("msg-003", attachment_filename=None)
         msg_good = _make_gmail_message("msg-004")
 
@@ -171,12 +169,7 @@ class TestEmailIntakePipeline:
         service.users().messages().get().execute.side_effect = [msg_no_attach, msg_good]
         mock_service_fn.return_value = service
 
-        with patch("app.engine.email_intake.parse_resume", return_value=_mock_resume_data()), \
-             patch("app.engine.email_intake.match_resume_to_jd", return_value=_mock_match_result()), \
-             patch("app.engine.email_intake.RESUME_DIR", tmp_path / "resumes"), \
-             patch("app.engine.email_intake._download_attachment", return_value=b"fake resume"):
-            from app.engine.email_intake import check_for_new_applications
-            results = check_for_new_applications("job-1")
+        results = _run_check("job-1", tmp_path)
 
         assert len(results) == 2
         assert results[0]["status"] == "skipped"
@@ -187,42 +180,33 @@ class TestEmailIntakePipeline:
         assert db.is_email_processed("msg-004") is True
 
     @patch("app.engine.email_intake.get_gmail_service")
-    @patch("app.engine.email_intake.match_resume_to_jd")
-    @patch("app.engine.email_intake.parse_resume")
     def test_already_processed_message_not_reprocessed(
-        self, mock_parse, mock_match, mock_service_fn, client, fresh_db, tmp_path
+        self, mock_service_fn, client, fresh_db, tmp_path
     ):
-        """Test 4: Already-processed message ID -> skipped entirely."""
         _make_job(client)
 
-        # Pre-record the message as processed
         from app.core.models import ProcessedEmail
         db.save_processed_email(ProcessedEmail(
             message_id="msg-005", job_id="job-1", candidate_id=None,
         ))
 
         msg = _make_gmail_message("msg-005")
-        service = _mock_gmail_service(messages=[{"id": "msg-005"}])
-        service.users().messages().get().execute.return_value = msg
+        service = _mock_gmail_service(messages=[{"id": "msg-005"}], msg=msg)
         mock_service_fn.return_value = service
 
-        with patch("app.engine.email_intake.RESUME_DIR", tmp_path / "resumes"):
-            from app.engine.email_intake import check_for_new_applications
-            results = check_for_new_applications("job-1")
+        results = _run_check("job-1", tmp_path)
 
         assert len(results) == 0
         assert db.get_all_candidates() == []
-        mock_parse.assert_not_called()
 
     @patch("app.engine.email_intake.get_gmail_service")
     def test_resume_parse_failure_skips_gracefully(
         self, mock_service_fn, client, fresh_db, tmp_path
     ):
-        """Test 5: Resume parse failure -> graceful skip, other emails still processed."""
         _make_job(client)
 
-        msg_bad = _make_gmail_message("msg-006")
-        msg_good = _make_gmail_message("msg-007")
+        msg_bad = _make_gmail_message("msg-006", sender="Bad Applicant <bad@example.com>")
+        msg_good = _make_gmail_message("msg-007", sender="Good Applicant <good@example.com>")
         service = _mock_gmail_service(messages=[
             {"id": "msg-006"},
             {"id": "msg-007"},
@@ -230,55 +214,53 @@ class TestEmailIntakePipeline:
         service.users().messages().get().execute.side_effect = [msg_bad, msg_good]
         mock_service_fn.return_value = service
 
-        parse_side_effect = [ValueError("Corrupted file"), _mock_resume_data()]
-
-        with patch("app.engine.email_intake.parse_resume", side_effect=parse_side_effect), \
-             patch("app.engine.email_intake.match_resume_to_jd", return_value=_mock_match_result()), \
-             patch("app.engine.email_intake.RESUME_DIR", tmp_path / "resumes"), \
-             patch("app.engine.email_intake._download_attachment", return_value=b"fake resume"):
-            from app.engine.email_intake import check_for_new_applications
-            results = check_for_new_applications("job-1")
+        good_resume = {
+            "skills": ["python", "sql"],
+            "experience_years": 5.0,
+            "education": ["B.Tech Computer Science"],
+            "raw_text": _RESUME_TEXT,
+        }
+        with patch("app.screening.service.parse_resume",
+                   side_effect=[ValueError("Corrupted file"), good_resume]):
+            results = _run_check("job-1", tmp_path)
 
         assert len(results) == 2
-        assert results[0]["status"] == "skipped"
-        assert results[0]["reason"] == "parse_failed"
+        assert results[0]["status"] == "error"
+        assert "Corrupted file" in results[0]["reason"]
         assert results[1]["status"] == "invited"
+        assert len(db.get_all_candidates()) == 1
 
         assert db.is_email_processed("msg-006") is True
         assert db.is_email_processed("msg-007") is True
 
     @patch("app.engine.email_intake.get_gmail_service")
-    @patch("app.engine.email_intake.match_resume_to_jd")
-    @patch("app.engine.email_intake.parse_resume")
-    def test_invite_send_failure_marks_candidate_correctly(
-        self, mock_parse, mock_match, mock_service_fn, client, fresh_db, tmp_path
+    def test_gmail_send_failure_does_not_affect_intake(
+        self, mock_service_fn, client, fresh_db, tmp_path
     ):
-        """Test 6: Candidate passes threshold but Gmail send fails ->
-        candidate exists with passed_threshold, invite_email_sent=False,
-        message still processed, no unhandled exception."""
+        """Emails are never sent by intake — a Gmail outage cannot lose an
+        application. The invite waits in the outbox instead."""
         _make_job(client, threshold=60.0)
 
         msg = _make_gmail_message("msg-008")
-        service = _mock_gmail_service(messages=[{"id": "msg-008"}])
-        service.users().messages().get().execute.return_value = msg
+        service = _mock_gmail_service(messages=[{"id": "msg-008"}], msg=msg)
         service.users().messages().send.side_effect = Exception("Gmail API rate limit")
         mock_service_fn.return_value = service
-        mock_parse.return_value = _mock_resume_data()
-        mock_match.return_value = _mock_match_result(match_score=80.0)
 
-        with patch("app.engine.email_intake.RESUME_DIR", tmp_path / "resumes"), \
-             patch("app.engine.email_intake._download_attachment", return_value=b"fake resume"):
-            from app.engine.email_intake import check_for_new_applications
-            results = check_for_new_applications("job-1")
+        results = _run_check("job-1", tmp_path)
 
         assert len(results) == 1
-        assert results[0]["status"] == "invite_send_failed"
-        assert results[0]["match_score"] == 80.0
+        assert results[0]["status"] == "invited"
 
-        candidates = db.get_all_candidates()
-        assert len(candidates) == 1
-        assert candidates[0]["screening_status"] == "passed_threshold"
-        assert candidates[0]["invite_email_sent"] is False
-        assert candidates[0]["source"] == "email_auto"
+        applications = fresh_db.get_all_applications()
+        assert applications[0]["screening_status"] == "completed"
+
+        candidate = db.get_all_candidates()[0]
+        assert candidate["screening_status"] == "passed_threshold"
+        assert candidate["invite_email_sent"] is False
+
+        pending = fresh_db.get_pending_notifications()
+        assert len(pending) == 1
+        assert pending[0]["status"] == "pending"
+        assert pending[0]["attempts"] == 0
 
         assert db.is_email_processed("msg-008") is True

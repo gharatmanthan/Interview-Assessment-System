@@ -1,11 +1,12 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from api.deps import get_current_recruiter
 from api.schemas import DeviceInfo
 
 router = APIRouter()
 
 
 @router.get("", response_model=list[DeviceInfo])
-def list_devices():
+def list_devices(username: str = Depends(get_current_recruiter)):
     devices = []
 
     try:

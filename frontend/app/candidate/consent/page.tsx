@@ -6,12 +6,13 @@ import { toast } from "sonner"
 import { api } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import type { Candidate, JobPosting } from "@/lib/types"
 import { Video, Mic, Monitor, Shield } from "lucide-react"
 
 export default function CandidateConsentPage() {
   const router = useRouter()
-  const [candidate, setCandidate] = useState<any>(null)
-  const [job, setJob] = useState<any>(null)
+  const [candidate, setCandidate] = useState<Candidate | null>(null)
+  const [job, setJob] = useState<JobPosting | null>(null)
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
@@ -21,8 +22,8 @@ export default function CandidateConsentPage() {
       router.push("/candidate/entry")
       return
     }
-    setCandidate(JSON.parse(c))
-    setJob(JSON.parse(j))
+    setCandidate(JSON.parse(c) as Candidate)
+    setJob(JSON.parse(j) as JobPosting)
   }, [router])
 
   async function handleAccept() {
@@ -32,7 +33,8 @@ export default function CandidateConsentPage() {
       const sessionId = crypto.randomUUID()
       sessionStorage.setItem("session_id", sessionId)
 
-      await api.recordConsent(sessionId, candidate.candidate_id)
+      const interviewToken = sessionStorage.getItem("interview_token") || ""
+      await api.recordConsent(sessionId, candidate.candidate_id, interviewToken)
       toast.success("Consent recorded")
       router.push("/candidate/device-check")
     } catch (err: any) {

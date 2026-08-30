@@ -31,6 +31,29 @@ DEFAULTS = {
     "gmail_connected": False,
     "gmail_user": "",
     "gmail_refresh_token": "",
+    "gmail_client_id": "",
+    "gmail_client_secret": "",
+    # Google Calendar integration (recruiter availability for auto-scheduling)
+    "calendar_connected": False,
+    "calendar_user": "",
+    "calendar_refresh_token": "",
+    "calendar_client_id": "",
+    "calendar_client_secret": "",
+    "calendar_id": "primary",
+    # Automatic interview scheduling configuration
+    "interview_duration_minutes": 45,
+    "interview_buffer_minutes": 10,
+    "work_start_hour": 9,       # auto-schedules only within these working hours
+    "work_end_hour": 18,
+    "scheduling_horizon_days": 30,
+    # Days of the week (0=Monday .. 6=Sunday) interviews may be scheduled on.
+    "working_days": [0, 1, 2, 3, 4],
+    # Dates (YYYY-MM-DD) the recruiter is unavailable — e.g. holidays.
+    "excluded_dates": [],
+    # HR digest email — receives the shortlist notification from the outbox.
+    "hr_email": "",
+    # HMAC signing secret for recruiter auth tokens (generated at first login).
+    "auth_secret": "",
 }
 
 

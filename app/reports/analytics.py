@@ -9,7 +9,15 @@ the three detail pages.
 from app.core import db
 
 
-def get_dashboard_stats() -> dict:
+def _scope_sessions(username: str | None = None) -> list:
+    return db.get_owned_sessions(username) if username else db.get_all_sessions()
+
+
+def _scope_candidates(username: str | None = None) -> list:
+    return db.get_owned_candidates(username) if username else db.get_all_candidates()
+
+
+def get_dashboard_stats(username: str | None = None) -> dict:
     """
     Returns:
     {
@@ -20,8 +28,10 @@ def get_dashboard_stats() -> dict:
         "candidates_by_status": dict,        # {"invited": n, "in_progress": n, "completed": n}
     }
     Consumed by: app/ui/pages/dashboard_page.py
+    When `username` is given, all numbers are scoped to that recruiter's jobs.
     """
-    sessions = db.get_all_sessions()
+    sessions = _scope_sessions(username)
+    owned_session_ids = {s["session_id"] for s in sessions}
 
     all_scores = []
     for s in sessions:
@@ -31,10 +41,16 @@ def get_dashboard_stats() -> dict:
         if all_scores else 0.0
     )
 
-    fairness_flags = db.get_all_fairness_flags()
-    integrity_flags = db.get_all_integrity_flags()
+    fairness_flags = [
+        f for f in db.get_all_fairness_flags()
+        if not username or f.get("session_id") in owned_session_ids
+    ]
+    integrity_flags = [
+        f for f in db.get_all_integrity_flags()
+        if not username or f.get("session_id") in owned_session_ids
+    ]
 
-    candidates = db.get_all_candidates()
+    candidates = _scope_candidates(username)
     by_status = {"invited": 0, "in_progress": 0, "completed": 0, "expired": 0}
     for c in candidates:
         by_status[c["status"]] = by_status.get(c["status"], 0) + 1
@@ -72,14 +88,15 @@ def get_candidate_report(session_id: str) -> dict:
     }
 
 
-def get_candidate_comparison(job_id: str = None) -> list:
+def get_candidate_comparison(job_id: str = None, username: str | None = None) -> list:
     """Ranked list of candidates by overall score, optionally filtered to
     one job posting. Powers the Reports page's 'Compare Candidates' view.
     Returns list of dicts, sorted by overall_score descending:
     [{"session_id", "candidate_name", "job_title", "overall_score",
       "category_scores": {category: score}}, ...]
+    When `username` is given, only that recruiter's sessions are used.
     """
-    sessions = db.get_all_sessions()
+    sessions = _scope_sessions(username)
     if job_id:
         jobs = {j["job_id"]: j for j in db.get_all_job_postings()}
         job_title = jobs.get(job_id, {}).get("title")
@@ -102,14 +119,14 @@ def get_candidate_comparison(job_id: str = None) -> list:
     return rows
 
 
-def export_candidates_csv(output_path: str, job_id: str = None) -> str:
+def export_candidates_csv(output_path: str, job_id: str = None, username: str | None = None) -> str:
     """Writes a CSV of all candidates (ranked) to output_path. Returns the path.
     Includes both interview-scored candidates and invited-but-not-yet-scored
     candidates from the candidates table, so recruiters get one full picture.
     """
     import csv
 
-    comparison = get_candidate_comparison(job_id)
+    comparison = get_candidate_comparison(job_id, username)
     all_categories = sorted({cat for row in comparison for cat in row["category_scores"]})
 
     with open(output_path, "w", newline="", encoding="utf-8") as f:

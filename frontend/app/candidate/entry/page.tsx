@@ -24,6 +24,9 @@ export default function CandidateEntryPage() {
       if (res.valid && res.candidate && res.job) {
         sessionStorage.setItem("candidate", JSON.stringify(res.candidate))
         sessionStorage.setItem("candidate_job", JSON.stringify(res.job))
+        if (res.interview_token) {
+          sessionStorage.setItem("interview_token", res.interview_token)
+        }
         router.push("/candidate/consent")
       } else {
         setError(res.message || "Invalid invite code")
