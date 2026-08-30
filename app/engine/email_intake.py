@@ -11,12 +11,12 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Optional
 
-from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 from app.core import db
 from app.core.models import ProcessedEmail
+from app.core.oauth_client import CLIENT_SECRET_PATH, load_oauth_credentials
 from app.core.settings_store import load_settings, save_settings
 
 logger = logging.getLogger(__name__)
@@ -29,35 +29,26 @@ SCOPES = [
 
 RESUME_DIR = Path(__file__).parent.parent.parent / "data" / "resumes"
 
-# Path to the OAuth client_secret.json (stored outside version control in data/)
-CLIENT_SECRET_PATH = Path(__file__).parent.parent.parent / "data" / "client_secret.json"
-
 
 def get_gmail_service():
-    """Build a Gmail API service from the stored refresh token.
-    Returns None if Gmail is not connected.
+    """Build a Gmail API service from the stored refresh token, using the
+    OAuth client config from data/client_secret.json (single source of truth).
+    Returns None if Gmail is not connected or the token/client cannot load.
     """
     settings = load_settings()
     if not settings.get("gmail_connected") or not settings.get("gmail_refresh_token"):
         return None
-    client_id = settings.get("gmail_client_id", "")
-    client_secret = settings.get("gmail_client_secret", "")
-    if not client_id or not client_secret:
-        logger.warning("Gmail connected but OAuth client_id/secret missing — blocking token refresh")
+    creds = load_oauth_credentials(settings.get("gmail_refresh_token", ""))
+    if creds is None:
         return None
-    creds = Credentials(
-        token=None,
-        refresh_token=settings["gmail_refresh_token"],
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=client_id,
-        client_secret=client_secret,
-    )
     return build("gmail", "v1", credentials=creds)
 
 
 def run_oauth_flow():
     """Run the OAuth consent flow and store the resulting credentials.
-    Returns the connected email address on success, raises on failure.
+    Persists only the refresh token + account markers; the OAuth client
+    config stays in data/client_secret.json. Returns the connected email
+    address on success, raises on failure.
     """
     if not CLIENT_SECRET_PATH.exists():
         raise FileNotFoundError(
@@ -70,22 +61,10 @@ def run_oauth_flow():
     profile = service.users().getProfile(userId="me").execute()
     email = profile["emailAddress"]
 
-    # Persist the OAuth client id/secret from client_secret.json alongside the
-    # refresh token. Without them, get_gmail_service() cannot refresh the token
-    # on later runs and the intake pipeline silently breaks.
-    import json as _json
-    with open(CLIENT_SECRET_PATH, "r") as f:
-        client_data = _json.load(f)
-    installed = client_data.get("installed") or client_data.get("web") or {}
-    client_id = installed.get("client_id", "")
-    client_secret = installed.get("client_secret", "")
-
     save_settings({
         "gmail_connected": True,
         "gmail_user": email,
         "gmail_refresh_token": creds.refresh_token,
-        "gmail_client_id": client_id,
-        "gmail_client_secret": client_secret,
     })
     return email
 
@@ -96,8 +75,6 @@ def disconnect_gmail():
         "gmail_connected": False,
         "gmail_user": "",
         "gmail_refresh_token": "",
-        "gmail_client_id": "",
-        "gmail_client_secret": "",
     })
 
 
@@ -342,6 +319,19 @@ def check_for_new_applications(job_id: str) -> list[dict]:
         _save_and_mark(service, message_id, job_id, candidate_id if candidate_id else application_id)
 
     return results
+
+
+def summarize_poll_results(results: list[dict]) -> tuple:
+    """Map the statuses emitted by check_for_new_applications into the
+    poll-log counters. The pipeline returns: invited, not_shortlisted,
+    skipped (no attachment / download failed), duplicate, error. Erroring
+    messages are reported as failed so operators can see processing problems;
+    the older below_threshold / invite_send_failed labels are not emitted."""
+    invited = sum(1 for r in results if r.get("status") == "invited")
+    below_threshold = sum(1 for r in results if r.get("status") == "not_shortlisted")
+    skipped = sum(1 for r in results if r.get("status") in ("skipped", "duplicate"))
+    failed = sum(1 for r in results if r.get("status") == "error")
+    return invited, below_threshold, skipped, failed
 
 
 def _save_and_mark(service, message_id: str, job_id: str, candidate_id: Optional[str]):

@@ -47,6 +47,16 @@ def list_candidates_for_job(job_id: str, username: str = Depends(get_current_rec
 def create_candidate(req: CandidateCreate, username: str = Depends(get_current_recruiter)):
     if not db.job_owned_by(req.job_id, username):
         raise HTTPException(status_code=403, detail="Not your job posting.")
+    existing = db.get_candidate(req.candidate_id)
+    if existing and existing["job_id"] != req.job_id:
+        # save_candidate upserts on the candidate_id PK, so honoring a
+        # collision against another job would silently repoint (hijack) a
+        # candidate that belongs to another recruiter's job. A job has exactly
+        # one owner, so any candidate_id reuse across jobs must be rejected.
+        raise HTTPException(
+            status_code=409,
+            detail="Candidate id already exists for another job posting.",
+        )
     invite_code = secrets.token_urlsafe(6)
     candidate = Candidate(
         candidate_id=req.candidate_id,

@@ -96,6 +96,11 @@ def _ensure_candidate(app: dict, job: dict, resume_data: dict, match_result: dic
 
     existing = db.get_candidate_by_email_job(app["email"], job["job_id"])
     if existing:
+        # Reuse the existing candidate (e.g. the recruiter manually pre-invited
+        # this person for the same job). Link this application to it so the
+        # recruitment view and outbox address the same candidate row — mirroring
+        # what the integrity-error adoption branch below does.
+        db.update_application_candidate(app["application_id"], existing["candidate_id"])
         return existing, False
 
     candidate = Candidate(

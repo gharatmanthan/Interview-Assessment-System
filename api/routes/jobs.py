@@ -20,10 +20,21 @@ def list_jobs(username: str = Depends(get_current_recruiter)):
 
 @router.post("", response_model=JobPostingResponse)
 def create_job(req: JobPostingCreate, username: str = Depends(get_current_recruiter)):
-    # The backend owns the canonical job id. A blank/client value is never
-    # persisted — the server generates a stable identifier that becomes the
-    # single source of truth for the public apply link.
-    job_id = (req.job_id or "").strip() or db.generate_job_id()
+    # The backend owns the canonical job id. A caller may propose an id for a
+    # brand-new job, but it is rejected the moment colleague work already holds
+    # that id: job_postings is INSERT OR REPLACE keyed on job_id and ownership
+    # is rooted on created_by, so honoring a colliding id on create would let a
+    # caller clobber another recruiter's job and take it over. Blank ids get a
+    # server-generated id; updates go through the ownership-checked PUT below.
+    job_id = (req.job_id or "").strip()
+    if job_id:
+        if db.get_job_posting(job_id):
+            raise HTTPException(
+                status_code=409,
+                detail="A job posting with this id already exists.",
+            )
+    else:
+        job_id = db.generate_job_id()
     job = JobPosting(
         job_id=job_id,
         title=req.title,

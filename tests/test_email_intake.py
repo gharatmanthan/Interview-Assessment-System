@@ -264,3 +264,36 @@ class TestEmailIntakePipeline:
         assert pending[0]["attempts"] == 0
 
         assert db.is_email_processed("msg-008") is True
+
+
+class TestEmailCheckSummary:
+    """Manual "Check Job" summary + poll log must count exactly the statuses
+    check_for_new_applications emits (invited / not_shortlisted / skipped /
+    duplicate / error), instead of labels the pipeline never produces."""
+
+    @patch("api.routes.email_intake.check_for_new_applications")
+    def test_manual_check_counts_emitted_statuses_and_writes_poll_log(
+        self, mock_check, client, fresh_db
+    ):
+        _make_job(client, job_id="job-1", label="Applications/Backend")
+        mock_check.return_value = [
+            {"message_id": "m1", "status": "invited", "candidate_id": "c1"},
+            {"message_id": "m2", "status": "not_shortlisted", "candidate_id": None},
+            {"message_id": "m3", "status": "skipped", "reason": "no_attachment"},
+            {"message_id": "m4", "status": "duplicate", "candidate_id": None},
+            {"message_id": "m5", "status": "error", "reason": "boom"},
+        ]
+
+        resp = client.post("/api/email-intake/check", json={"job_id": "job-1"})
+        assert resp.status_code == 200
+        assert resp.json()["summary"] == (
+            "5 checked, 1 invited, 1 not shortlisted, 2 skipped, 1 failed"
+        )
+
+        latest = fresh_db.get_poll_logs(limit=5)[0]
+        assert latest["job_id"] == "job-1"
+        assert latest["total_checked"] == 5
+        assert latest["invited"] == 1
+        assert latest["below_threshold"] == 1
+        assert latest["skipped"] == 2
+        assert latest["failed"] == 1

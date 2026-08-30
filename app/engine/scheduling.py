@@ -12,17 +12,14 @@ Flow:
    avoid it.
 """
 import base64
-import json
 import logging
 from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Optional
 
-from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 from app.core import db
+from app.core.oauth_client import CLIENT_SECRET_PATH, load_oauth_credentials
 from app.core.settings_store import load_settings, save_settings
 
 logger = logging.getLogger(__name__)
@@ -34,34 +31,26 @@ SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
 ]
 
-CLIENT_SECRET_PATH = Path(__file__).parent.parent.parent / "data" / "client_secret.json"
-
 
 def get_calendar_service():
-    """Build a Google Calendar service from the stored refresh token.
-    Returns None if the calendar is not connected.
+    """Build a Google Calendar service from the stored refresh token, using
+    the OAuth client config from data/client_secret.json (single source of
+    truth). Returns None if the calendar is not connected.
     """
     settings = load_settings()
     if not settings.get("calendar_connected") or not settings.get("calendar_refresh_token"):
         return None
-    client_id = settings.get("calendar_client_id", "")
-    client_secret = settings.get("calendar_client_secret", "")
-    if not client_id or not client_secret:
-        logger.warning("Calendar connected but OAuth client_id/secret missing — blocking token refresh")
+    creds = load_oauth_credentials(settings.get("calendar_refresh_token", ""))
+    if creds is None:
         return None
-    creds = Credentials(
-        token=None,
-        refresh_token=settings["calendar_refresh_token"],
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=client_id,
-        client_secret=client_secret,
-    )
     return build("calendar", "v3", credentials=creds)
 
 
 def run_calendar_oauth_flow() -> str:
     """Run the OAuth consent flow and store the resulting credentials.
-    Returns the connected account email on success, raises on failure.
+    Persists only the refresh token + account markers; the OAuth client
+    config stays in data/client_secret.json. Returns the connected account
+    email on success, raises on failure.
     """
     if not CLIENT_SECRET_PATH.exists():
         raise FileNotFoundError(
@@ -74,18 +63,10 @@ def run_calendar_oauth_flow() -> str:
     about = service.calendarList().get(calendarId="primary").execute()
     email = about.get("id", "")
 
-    with open(CLIENT_SECRET_PATH, "r") as f:
-        client_data = json.load(f)
-    installed = client_data.get("installed") or client_data.get("web") or {}
-    client_id = installed.get("client_id", "")
-    client_secret = installed.get("client_secret", "")
-
     save_settings({
         "calendar_connected": True,
         "calendar_user": email,
         "calendar_refresh_token": creds.refresh_token,
-        "calendar_client_id": client_id,
-        "calendar_client_secret": client_secret,
         "calendar_id": "primary",
     })
     return email
@@ -97,8 +78,6 @@ def disconnect_calendar():
         "calendar_connected": False,
         "calendar_user": "",
         "calendar_refresh_token": "",
-        "calendar_client_id": "",
-        "calendar_client_secret": "",
     })
 
 

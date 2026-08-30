@@ -92,3 +92,35 @@ class TestJobIdContract:
 
         assert public_client.get(f"/api/public/jobs/{a['job_id']}").json()["title"] == "Job A"
         assert public_client.get(f"/api/public/jobs/{b['job_id']}").json()["title"] == "Job B"
+
+    def test_create_cannot_hijack_existing_job_via_client_job_id(self, fresh_db):
+        """A caller sending an existing job_id on POST must never take over or
+        clobber that job (job_postings is INSERT OR REPLACE keyed on job_id and
+        ownership is rooted on created_by), so create rejects a colliding id.
+        Regression for the authorization-root guarantee."""
+        from fastapi.testclient import TestClient
+
+        from api.main import app
+        from app.core.auth import register_recruiter
+        from app.core.tokens import create_token
+
+        def _auth_client(username: str):
+            register_recruiter(username, "secret123", username)
+            token, _ = create_token(username)
+            c = TestClient(app)
+            c.headers.update({"Authorization": f"Bearer {token}"})
+            return c
+
+        creator = _auth_client("recruiterA")
+        attacker = _auth_client("recruiterB")
+
+        created = creator.post("/api/jobs", json=_payload(title="A's Job")).json()
+        victim_id = created["job_id"]
+
+        hijack = attacker.post("/api/jobs", json=_payload(job_id=victim_id, title="B's Job"))
+        assert hijack.status_code == 409, "create must not clobber an existing job id"
+
+        job_after = creator.get("/api/jobs").json()
+        assert job_after[0]["job_id"] == victim_id
+        assert job_after[0]["title"] == "A's Job"
+        assert victim_id not in {j["job_id"] for j in attacker.get("/api/jobs").json()}

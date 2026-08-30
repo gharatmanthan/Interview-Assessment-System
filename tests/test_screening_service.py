@@ -108,6 +108,33 @@ def test_decision_thresholds():
 
 # --- application lifecycle ---
 
+def test_screen_reuses_preexisting_candidate_and_links_application(fresh_db, make_job, resume_txt):
+    """When a candidate row already exists for (email, job) — e.g. the recruiter
+    manually pre-invited them — a later screening pass must reuse it AND link
+    the new application to it, exactly like the race-adoption branch does.
+    Otherwise application.candidate_id silently stays None."""
+    from app.core.models import Candidate
+
+    job = make_job()
+    fresh_db.save_candidate(Candidate(
+        candidate_id="manual-1", job_id=job["job_id"], name="Jane",
+        email="cand@example.com", invite_code="manualcode",
+    ))
+
+    app = _apply(fresh_db, job, resume_txt)
+    summary = _screen(fresh_db, app)
+
+    assert summary["decision"] == "passed"
+    assert summary["candidate_id"] == "manual-1"
+    saved = fresh_db.get_application(app.application_id)
+    assert saved["candidate_id"] == "manual-1", "application must be linked to the reused candidate"
+    # exactly one candidate row for (email, job)
+    assert len(fresh_db.get_candidates_for_job(job["job_id"])) == 1
+    # the invite was queued to the reused candidate
+    msgs = fresh_db.get_notifications_for_application(app.application_id)
+    assert any(m["candidate_id"] == "manual-1" for m in msgs)
+
+
 def test_create_application_and_queue(fresh_db, make_job, resume_txt):
     from app.screening.service import DuplicateApplicationError
     job = make_job()

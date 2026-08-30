@@ -30,7 +30,10 @@ async def _background_poll():
         await asyncio.sleep(600)  # every 10 minutes
         try:
             from app.core.settings_store import load_settings
-            from app.engine.email_intake import check_for_new_applications
+            from app.engine.email_intake import (
+                check_for_new_applications,
+                summarize_poll_results,
+            )
             settings = load_settings()
             if settings.get("backend_mode") != "remote":
                 continue
@@ -41,10 +44,7 @@ async def _background_poll():
                 try:
                     results = check_for_new_applications(job["job_id"])
                     total = len(results)
-                    invited = sum(1 for r in results if r.get("status") == "invited")
-                    below = sum(1 for r in results if r.get("status") in ("below_threshold", "not_shortlisted"))
-                    skipped = sum(1 for r in results if r.get("status") in ("skipped", "error", "duplicate"))
-                    failed = sum(1 for r in results if r.get("status") == "invite_send_failed")
+                    invited, below, skipped, failed = summarize_poll_results(results)
                     if total > 0:
                         db.save_poll_log(
                             job_id=job["job_id"],

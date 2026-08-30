@@ -124,6 +124,30 @@ class TestOwnershipScoping:
             })
             assert r.status_code == 403
 
+    def test_create_candidate_cannot_repoint_existing_candidate_to_another_job(self, fresh_db):
+        """save_candidate upserts on the candidate_id PK, so reusing an id that
+        already belongs to another job would silently hijack/repoint that
+        candidate. Create must reject a cross-job collision with 409."""
+        with _auth_client("owner-a") as a:
+            _create_job(a, "job-a", "Eng A")
+            a.post("/api/candidates", json={
+                "candidate_id": "c1", "job_id": "job-a",
+                "name": "Jane", "email": "jane@example.com",
+            })
+        with _auth_client("owner-b") as b:
+            _create_job(b, "job-b", "Eng B")
+            r = b.post("/api/candidates", json={
+                "candidate_id": "c1", "job_id": "job-b",
+                "name": "Mallory", "email": "mallory@example.com",
+            })
+            assert r.status_code == 409
+
+        # candidate still belongs to owner-a's job and is unchanged.
+        cand = db.get_candidate("c1")
+        assert cand["job_id"] == "job-a"
+        assert cand["name"] == "Jane"
+        assert cand["email"] == "jane@example.com"
+
 
 class TestSignedMedia:
     def test_sign_requires_auth(self, public_client):

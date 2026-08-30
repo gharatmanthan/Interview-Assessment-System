@@ -1,7 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from api.deps import get_current_recruiter
 from api.schemas import EmailCheckRequest, EmailCheckResponse, PollLogResponse
-from app.engine.email_intake import check_for_new_applications
+from app.engine.email_intake import (
+    check_for_new_applications,
+    summarize_poll_results,
+)
 from app.core import db
 
 router = APIRouter()
@@ -16,14 +19,11 @@ def trigger_email_check(req: EmailCheckRequest, username: str = Depends(get_curr
     if not db.job_owned_by(req.job_id, username):
         raise HTTPException(status_code=403, detail="Not your job posting.")
     results = check_for_new_applications(req.job_id)
-    invited = sum(1 for r in results if r.get("status") == "invited")
-    below = sum(1 for r in results if r.get("status") in ("below_threshold", "not_shortlisted"))
-    skipped = sum(1 for r in results if r.get("status") in ("skipped", "error", "duplicate"))
-    failed = sum(1 for r in results if r.get("status") == "invite_send_failed")
+    invited, below, skipped, failed = summarize_poll_results(results)
     total = len(results)
     summary = f"{total} checked, {invited} invited, {below} not shortlisted, {skipped} skipped"
     if failed:
-        summary += f", {failed} invite sends failed"
+        summary += f", {failed} failed"
     if total > 0:
         db.save_poll_log(
             job_id=req.job_id,
