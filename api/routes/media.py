@@ -12,13 +12,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from api.deps import get_current_recruiter
+from app.core.paths import get_uploads_dir, get_resumes_dir
 from app.core.tokens import create_media_token, verify_media_token
 
 router = APIRouter()
 
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
-MEDIA_DIR = DATA_DIR / "uploads"
-RESUMES_DIR = DATA_DIR / "resumes"
+# Module-level variables that can be monkeypatched in tests
+MEDIA_DIR = get_uploads_dir()
+RESUMES_DIR = get_resumes_dir()
 
 
 def media_roots():

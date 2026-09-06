@@ -4,6 +4,19 @@ export interface AuthResponse {
   username?: string
 }
 
+export type InterviewStrategy = "AUTO" | "MODE_1_ONLY" | "MODE_2_THEN_MODE_1"
+
+export type InterviewMode = "MODE_1" | "MODE_2"
+
+export type ModeStatus =
+  | "SHORTLISTED"
+  | "CONFIRMED"
+  | "INVITED"
+  | "COMPLETED"
+  | "PROMOTED"
+  | "NOT_PROMOTED"
+  | ""
+
 export interface JobPosting {
   job_id: string
   title: string
@@ -18,10 +31,76 @@ export interface JobPosting {
   created_at?: string
   screening_threshold: number
   application_gmail_label: string
+  linkedin_post_status?: string
+  linkedin_post_id?: string | null
+  linkedin_post_url?: string | null
+  linkedin_posted_at?: string | null
+  linkedin_author_urn?: string | null
+  linkedin_last_error?: string | null
+  // Interview-mode routing (job-level strategy)
+  interview_strategy?: InterviewStrategy
+  recommended_strategy?: InterviewStrategy
+  strategy_confirmed?: boolean
+  strategy_confirmed_at?: string | null
+  cohort_finalized_at?: string | null
 }
 
 // Server assigns the canonical id on create; the client never supplies it.
-export type JobCreateInput = Omit<JobPosting, "job_id">
+export type JobCreateInput = Omit<JobPosting, "job_id" | "linkedin_post_status" | "linkedin_post_id" | "linkedin_post_url" | "linkedin_posted_at" | "linkedin_author_urn" | "linkedin_last_error" | "interview_strategy" | "recommended_strategy" | "strategy_confirmed" | "strategy_confirmed_at" | "cohort_finalized_at">
+
+export type LinkedInPostStatus =
+  | "NOT_POSTED"
+  | "DRAFT"
+  | "PUBLISHING"
+  | "PUBLISHED"
+  | "FAILED"
+
+// Live interview-mode routing status for a job's screening cohort.
+// Mirrors api/schemas.py JobStrategyStatusResponse.
+export interface JobStrategyStatus {
+  job_id: string
+  screening_pending: number
+  shortlisted: number
+  cohort_finalized: boolean
+  recommended_strategy: InterviewStrategy
+  interview_strategy: InterviewStrategy
+  strategy_confirmed: boolean
+  strategy_confirmed_at?: string | null
+  cohort_finalized_at?: string | null
+  interview_capacity: number
+}
+
+export interface JobStrategyConfirmInput {
+  strategy: InterviewStrategy
+}
+
+export interface LinkedInStatus {
+  connected: boolean
+  member_name: string
+  member_email: string
+  connected_at?: string | null
+  member_author_urn: string
+}
+
+export interface LinkedInConnectResult {
+  authorization_url: string
+}
+
+export interface LinkedInPreview {
+  job_id: string
+  content: string
+  public_url: string
+  linkedin_post_status: string
+  connected: boolean
+}
+
+export interface LinkedInPublishResult {
+  success: boolean
+  job_id: string
+  linkedin_post_status: string
+  post_id?: string | null
+  post_url?: string | null
+}
 
 export interface Candidate {
   candidate_id: string
@@ -44,6 +123,15 @@ export interface Candidate {
   invite_email_sent: boolean
   application_id?: string | null
   screening_result?: ScreeningResult | null
+  // Interview-mode routing (candidate-level)
+  interview_mode?: InterviewMode | ""
+  mode_status?: ModeStatus
+  mode2_score?: number | null
+  overall_score?: number | null
+  rank?: number | null
+  ranked_at?: string | null
+  promoted_at?: string | null
+  mode_assignment_source?: string
 }
 
 export interface InterviewSession {
@@ -57,6 +145,125 @@ export interface InterviewSession {
   started_at?: string
   completed_at?: string
   status: string
+}
+
+export interface TranscriptionResponse {
+  question_id: string
+  transcript: string
+  audio_path?: string
+}
+
+export interface QuestionItem {
+  question_index: number
+  question_id: string
+  question_text: string
+  category: string
+  competency: string
+  difficulty: string
+  source: string
+}
+
+export interface SelectQuestionsResponse {
+  session_id: string
+  questions: QuestionItem[]
+  locked: boolean
+}
+
+export interface CandidateQuestionsResponse {
+  session_id: string
+  questions: QuestionItem[]
+}
+
+// --- Phase 3B: MODE 2 self-serve interview progress / status ---
+
+export interface CandidateProgressResponse {
+  session_id: string
+  interview_status: string // not_ready | ready | in_progress | completed
+  total_questions: number
+  answered_questions: number
+  remaining_questions: number
+  current_question: QuestionItem | null
+  completed: boolean
+}
+
+export interface InterviewStatusResponse {
+  candidate_id: string
+  session_id: string
+  interview_status: string // not_ready | ready | in_progress | completed
+  locked: boolean
+  total_questions: number
+  answered_questions: number
+  categories: string[]
+  candidate_status: string
+}
+
+// --- Phase 3A: MODE 1 live interview ---
+
+export type LiveRole = "recruiter" | "candidate"
+
+export interface LiveConnectionCounts {
+  recruiter: number
+  candidate: number
+}
+
+export interface LiveJoinedMessage {
+  type: "joined"
+  role: LiveRole
+  session_status: string
+  current_question: QuestionItem | null
+  has_questions: boolean
+  connections: LiveConnectionCounts
+}
+
+export interface LiveQuestionAskedMessage {
+  type: "question_asked"
+  question: QuestionItem
+}
+
+export interface LiveTranscriptReadyMessage {
+  type: "transcript_ready"
+  question_id: string
+  transcript: string
+}
+
+export interface LiveConnectionStatusMessage {
+  type: "connection_status"
+  recruiter: number
+  candidate: number
+}
+
+export interface LiveInterviewEndedMessage {
+  type: "interview_ended"
+  status: string
+}
+
+export interface LiveAnswerStartedMessage {
+  type: "answer_started"
+}
+
+export interface LiveErrorMessage {
+  type: "error"
+  code: string
+  message?: string
+}
+
+export type LiveServerMessage =
+  | LiveJoinedMessage
+  | LiveQuestionAskedMessage
+  | LiveTranscriptReadyMessage
+  | LiveConnectionStatusMessage
+  | LiveInterviewEndedMessage
+  | LiveAnswerStartedMessage
+  | LiveErrorMessage
+
+export interface LiveCandidateState {
+  interviewToken: string
+  sessionId: string | null
+}
+
+export interface LiveRecruiterState {
+  token: string
+  sessionId: string
 }
 
 export interface DashboardStats {

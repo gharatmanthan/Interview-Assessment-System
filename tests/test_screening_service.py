@@ -130,9 +130,11 @@ def test_screen_reuses_preexisting_candidate_and_links_application(fresh_db, mak
     assert saved["candidate_id"] == "manual-1", "application must be linked to the reused candidate"
     # exactly one candidate row for (email, job)
     assert len(fresh_db.get_candidates_for_job(job["job_id"])) == 1
-    # the invite was queued to the reused candidate
-    msgs = fresh_db.get_notifications_for_application(app.application_id)
-    assert any(m["candidate_id"] == "manual-1" for m in msgs)
+    # the reused candidate is SHORTLISTED awaiting strategy confirmation (no
+    # invite is enqueued during screening itself; no hr_email is configured
+    # here so nothing else is on the outbox either).
+    reused = fresh_db.get_candidate("manual-1")
+    assert reused["mode_status"] == "SHORTLISTED"
 
 
 def test_create_application_and_queue(fresh_db, make_job, resume_txt):
@@ -199,9 +201,17 @@ def test_screen_application_passed(fresh_db, make_job, resume_txt, monkeypatch):
     assert invites[0]["status"] == "active"
 
     msgs = fresh_db.get_notifications_for_application(app.application_id)
-    assert {m["notification_type"] for m in msgs} == {"hr_shortlist", "interview_invite"}
+    # The candidate is only SHORTLISTED here: the job-level interview-mode
+    # strategy must be confirmed before any candidate invite is enqueued, so a
+    # screening pass itself enqueues only the HR digest (never the invite).
+    assert {m["notification_type"] for m in msgs} == {"hr_shortlist"}
     assert sum(1 for m in msgs if m["recipient"] == "hr@acme.test") == 1
-    assert sum(1 for m in msgs if m["recipient"] == "cand@example.com") == 1
+    assert sum(1 for m in msgs if m["recipient"] == "cand@example.com") == 0
+    # Cohort finalized + AUTO recommendation derived from the shortlist count.
+    assert fresh_db.get_candidate(candidates[0]["candidate_id"])["mode_status"] == "SHORTLISTED"
+    status = fresh_db.get_job_cohort_status(job["job_id"])
+    assert status["cohort_finalized"] is True
+    assert status["recommended_strategy"] == "MODE_1_ONLY"
 
 
 def _screen(fresh_db, app):
@@ -231,7 +241,7 @@ def test_screen_application_idempotent(fresh_db, make_job, resume_txt, monkeypat
     candidate = fresh_db.get_candidates_for_job(job["job_id"])[0]
     assert len(fresh_db.get_interview_invites_for_candidate(candidate["candidate_id"])) == 1
     msgs = fresh_db.get_notifications_for_application(app.application_id)
-    assert len(msgs) == 2  # no duplicated outbox entries
+    assert len(msgs) == 1  # hr_shortlist only: no invite enqueued at screening time
     assert fresh_db.get_screening_result(app.application_id)["decision"] == "passed"
 
 

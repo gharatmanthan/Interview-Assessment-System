@@ -3,10 +3,12 @@ from pathlib import Path
 
 import cv2
 
+from app.core.paths import get_face_profiles_dir
+
 
 CASCADE_PATH = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
 FACE_DETECTOR = cv2.CascadeClassifier(str(CASCADE_PATH))
-PROFILE_DIR = Path(__file__).parent.parent.parent / "data" / "face_profiles"
+PROFILE_DIR = get_face_profiles_dir()
 
 
 def detect_faces(frame):

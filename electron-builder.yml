@@ -1,25 +1,40 @@
 appId: com.interviewiq.desktop
 productName: InterviewIQ
+electronVersion: 43.4.1
 directories:
-  output: release
+  # The Electron application root (has package.json with main: dist/main.js).
+  app: electron
+  # Installers land under <repo>/release/installer.
+  buildResources: assets
+  output: release/installer
 files:
   - dist/**/*
-  - ../frontend/out/**/*
 extraResources:
-  - from: ../api
-    to: api
-  - from: ../app
-    to: app
-  - from: ../requirements.txt
-    to: requirements.txt
-  - from: ../data
-    to: data
-  - from: ../api/__init__.py
-    to: api/__init__.py
-  - from: ../api/routes
-    to: api/routes
+  # Self-contained backend bundle produced by scripts/build_backend_bundle.py,
+  # placed at the packaged app's <resources>/ root:
+  #   resources/python/        portable CPython + site-packages
+  #   resources/backend/       api/ + app/ source (FastAPI application)
+  #   resources/whisper/       bundled faster-whisper "base" model
+  #   resources/frontend/out/  static Next.js export
+  # Secrets and user data are NEVER bundled — they live in the per-user
+  # app-data dir (app.getPath('userData')) at runtime instead.
+  - from: release/portable
+    to: "."
+    filter:
+      - "**/*"
+      - "!**/__pycache__/**"
+      - "!**/*.pyc"
+      - "!**/.env"
+      - "!**/*.log"
+      - "!**/*.md"
 win:
   target: nsis
+  signAndEditExecutable: false
+  # No code signing certificate for local/enterprise builds by default.
+  # Sign with CSC_LINK/CSC_KEY_PASSWORD in CI when distributing.
+  publisherName: InterviewIQ
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+  perMachine: false
+  artifactName: InterviewIQ-Setup-${version}.${ext}

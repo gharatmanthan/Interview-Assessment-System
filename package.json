@@ -9,9 +9,12 @@
     "start:electron": "cd electron && npm start",
     "build:frontend": "cd frontend && npm run build",
     "build:electron": "cd electron && npm run build",
-    "install:all": "cd frontend && npm install && cd ../electron && npm install"
+    "build:portable": "python scripts/build_backend_bundle.py",
+    "dist:win": "npm run build:portable && npm run build:frontend && npm run build:electron && npx electron-builder --win nsis",
+    "install:all": "cd frontend && npm install && cd ../electron && npm install && npm install"
   },
   "devDependencies": {
-    "concurrently": "^9.0.0"
+    "concurrently": "^9.0.0",
+    "electron-builder": "^24.13.3"
   }
 }

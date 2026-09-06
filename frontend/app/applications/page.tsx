@@ -1,9 +1,9 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useMemo } from "react"
 import { toast } from "sonner"
 import { api, mediaUrl } from "@/lib/api"
-import type { ApplicationDetail, JobPosting, JobPipelineStat } from "@/lib/types"
+import type { ApplicationDetail, JobPosting, JobPipelineStat, Candidate } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -46,20 +46,30 @@ function StatCard({ label, value, tone = "default" }: StatCardProps) {
 
 export default function ApplicationsPage() {
   const [applications, setApplications] = useState<ApplicationDetail[]>([])
+  const [candidates, setCandidates] = useState<Candidate[]>([])
   const [jobs, setJobs] = useState<JobPosting[]>([])
   const [pipeline, setPipeline] = useState<JobPipelineStat[]>([])
   const [jobFilter, setJobFilter] = useState<string>("all")
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  const candidateByApp = useMemo(() => {
+    const map = new Map<string, Candidate>()
+    for (const c of candidates) if (c.application_id) map.set(c.application_id, c)
+    return map
+  }, [candidates])
+
   const fetchData = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [res, jobList, stats] = await Promise.all([api.getApplications(), api.getJobs(), api.getApplicationStats()])
+      const [res, jobList, stats, cands] = await Promise.all([
+        api.getApplications(), api.getJobs(), api.getApplicationStats(), api.getCandidates(),
+      ])
       setApplications(res.applications)
       setJobs(jobList)
       setPipeline(stats.jobs)
+      setCandidates(cands)
     } catch (err: any) {
       setError(err.message || "Failed to load data")
       toast.error("Failed to load applications")
@@ -174,6 +184,9 @@ export default function ApplicationsPage() {
                     <TableHead>Status</TableHead>
                     <TableHead>Screening</TableHead>
                     <TableHead>Score</TableHead>
+                    <TableHead>Mode</TableHead>
+                    <TableHead>Mode 2</TableHead>
+                    <TableHead>Rank</TableHead>
                     <TableHead>Key Signals</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
@@ -185,6 +198,7 @@ export default function ApplicationsPage() {
                       ? (decisionConfig[app.screening_result.decision] ?? { label: app.screening_result.decision, variant: "outline" as const })
                       : null
                     const score = app.screening_result?.ats_score
+                    const candidate = app.candidate_id ? candidateByApp.get(app.candidate_id) : undefined
                     return (
                       <TableRow key={app.application_id}>
                         <TableCell>
@@ -201,6 +215,31 @@ export default function ApplicationsPage() {
                             <Badge variant={score >= 70 ? "success" : score >= 40 ? "warning" : "destructive"}>
                               {Math.round(score)}%
                             </Badge>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {candidate?.interview_mode ? (
+                            <Badge variant={candidate.interview_mode === "MODE_1" ? "default" : "secondary"}>
+                              {candidate.interview_mode.replace("_", " ")}
+                            </Badge>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {candidate?.mode2_score != null ? (
+                            <span className="text-sm tabular-nums text-foreground">
+                              {candidate.mode2_score.toFixed(1)}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {candidate?.rank != null ? (
+                            <span className="text-sm font-medium tabular-nums text-foreground">#{candidate.rank}</span>
                           ) : (
                             <span className="text-muted-foreground">—</span>
                           )}

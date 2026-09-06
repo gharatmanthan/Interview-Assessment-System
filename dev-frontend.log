@@ -1,0 +1,24 @@
+
+> interviewiq@1.0.0 dev:frontend
+> cd frontend && npm run dev
+
+
+> interviewiq-frontend@1.0.0 dev
+> next dev
+
+  ▲ Next.js 14.2.35
+  - Local:        http://localhost:3000
+
+ ✓ Starting...
+ ✓ Ready in 2.6s
+ ○ Compiling / ...
+ ✓ Compiled / in 881ms (555 modules)
+ GET / 200 in 1156ms
+ GET / 200 in 42ms
+ ○ Compiling /login ...
+ ✓ Compiled /login in 1851ms (620 modules)
+ ✓ Compiled in 169ms (320 modules)
+ ✓ Compiled /dashboard in 479ms (624 modules)
+ ○ Compiling /candidates ...
+ ✓ Compiled /candidates in 1485ms (778 modules)
+^C^C^C

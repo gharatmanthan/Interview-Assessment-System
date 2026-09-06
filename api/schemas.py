@@ -2,9 +2,11 @@
 Pydantic schemas matching app/core/models.py dataclasses.
 These are API request/response models only — the dataclasses remain source of truth.
 """
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional, Union
 from datetime import datetime
+
+from app.core.validation import is_valid_email, normalize_email
 
 
 class RegisterRequest(BaseModel):
@@ -36,13 +38,13 @@ class ValidateCodeRequest(BaseModel):
 
 
 class ConsentRequest(BaseModel):
-    session_id: str
+    session_id: str = ""  # deprecated/ignored — the server resolves the authoritative session
     candidate_id: str = ""
     interview_token: str = ""
 
 
 class StartSessionRequest(BaseModel):
-    session_id: str
+    session_id: str = ""  # deprecated/ignored — the server resolves the authoritative session
     candidate_id: str = ""
     job_id: str = ""
     interview_token: str = ""
@@ -113,6 +115,71 @@ class JobPostingResponse(BaseModel):
     required_education: str = ""
     screening_weights: dict[str, float] = {}
     created_by: str = "recruiter"
+    linkedin_post_status: str = "NOT_POSTED"
+    linkedin_post_id: Optional[str] = None
+    linkedin_post_url: Optional[str] = None
+    linkedin_posted_at: Optional[str] = None
+    linkedin_author_urn: Optional[str] = None
+    linkedin_last_error: Optional[str] = None
+    # Interview-mode routing (job-level strategy)
+    interview_strategy: str = "AUTO"
+    recommended_strategy: str = "AUTO"
+    strategy_confirmed: bool = False
+    strategy_confirmed_at: Optional[str] = None
+    cohort_finalized_at: Optional[str] = None
+
+
+class JobStrategyConfirmRequest(BaseModel):
+    """Recruiter confirmation of the job's interview-mode strategy. AUTO uses
+    the recommendation computed from the finalized shortlist; the explicit
+    modes override it. Invitations are only enqueued after confirmation."""
+    strategy: str = "AUTO"
+
+
+class JobStrategyStatusResponse(BaseModel):
+    """Live interview-mode routing status for a job's screening cohort."""
+    job_id: str
+    screening_pending: int = 0
+    shortlisted: int = 0
+    cohort_finalized: bool = False
+    recommended_strategy: str = "AUTO"
+    interview_strategy: str = "AUTO"
+    strategy_confirmed: bool = False
+    strategy_confirmed_at: Optional[str] = None
+    cohort_finalized_at: Optional[str] = None
+    interview_capacity: int = 6
+
+
+class LinkedInStatusResponse(BaseModel):
+    connected: bool
+    member_name: str = ""
+    member_email: str = ""
+    connected_at: Optional[str] = None
+    member_author_urn: str = ""
+
+
+class LinkedInConnectResponse(BaseModel):
+    authorization_url: str = ""
+
+
+class LinkedInPreviewResponse(BaseModel):
+    job_id: str
+    content: str
+    public_url: str
+    linkedin_post_status: str = "NOT_POSTED"
+    connected: bool = False
+
+
+class LinkedInPublishRequest(BaseModel):
+    content: str
+
+
+class LinkedInPublishResponse(BaseModel):
+    success: bool
+    job_id: str
+    linkedin_post_status: str = "NOT_POSTED"
+    post_id: Optional[str] = None
+    post_url: Optional[str] = None
 
 
 class CandidateCreate(BaseModel):
@@ -120,6 +187,14 @@ class CandidateCreate(BaseModel):
     job_id: str
     name: str
     email: str
+
+    @field_validator("email")
+    @classmethod
+    def _validate_email(cls, v: str) -> str:
+        normalized = normalize_email(v)
+        if not is_valid_email(normalized):
+            raise ValueError("Enter a valid email address.")
+        return normalized
 
 
 class CandidateResponse(BaseModel):
@@ -143,12 +218,22 @@ class CandidateResponse(BaseModel):
     invite_email_sent: bool = False
     application_id: Optional[str] = None
     screening_result: Optional[dict] = None
+    # Interview-mode routing (candidate-level)
+    interview_mode: str = ""
+    mode_status: str = ""
+    mode2_score: Optional[float] = None
+    overall_score: Optional[float] = None
+    rank: Optional[int] = None
+    ranked_at: Optional[str] = None
+    promoted_at: Optional[str] = None
+    mode_assignment_source: str = ""
 
 
 class SessionCreate(BaseModel):
-    session_id: str
-    candidate_name: str
-    job_title: str
+    candidate_id: str
+    session_id: str = ""  # ignored for authority; server resolves the real id
+    candidate_name: str = ""
+    job_title: str = ""
     job_id: Optional[str] = None
 
 
@@ -163,6 +248,72 @@ class SessionResponse(BaseModel):
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     status: str = "in_progress"
+
+
+class TranscriptionResponse(BaseModel):
+    question_id: str
+    transcript: str
+    audio_path: Optional[str] = None
+
+
+class QuestionItem(BaseModel):
+    question_index: int
+    question_id: str
+    question_text: str
+    category: str
+    competency: str
+    difficulty: str
+    source: str
+
+
+class SelectQuestionsRequest(BaseModel):
+    session_id: str
+    num_questions: int = 10
+    force_generated: bool = False
+
+
+class SelectQuestionsResponse(BaseModel):
+    session_id: str
+    questions: list[QuestionItem]
+    locked: bool = True
+
+
+class CandidateQuestionsResponse(BaseModel):
+    session_id: str
+    questions: list[QuestionItem]
+
+
+class CandidateProgressResponse(BaseModel):
+    """Server-authoritative Mode 2 interview progress.
+
+    The candidate UI recovers its position from this endpoint (refresh-proof)
+    instead of trusting browser sessionStorage. current_question is the first
+    locked question (by question_index) that has no competency score yet.
+    """
+    session_id: str
+    interview_status: str                 # not_ready | ready | in_progress | completed
+    total_questions: int
+    answered_questions: int
+    remaining_questions: int
+    current_question: Optional[QuestionItem] = None
+    completed: bool = False
+
+
+class InterviewStatusResponse(BaseModel):
+    """Recruiter-facing Mode 2 interview status + question-set summary.
+
+    Derives the high-level state (Not prepared / Ready / In progress /
+    Completed) from the session's locked question set + scored answers, so the
+    recruiter never needs a live connection to see where the candidate is.
+    """
+    candidate_id: str
+    session_id: str
+    interview_status: str                 # not_ready | ready | in_progress | completed
+    locked: bool
+    total_questions: int
+    answered_questions: int
+    categories: list[str] = []
+    candidate_status: str = ""
 
 
 class ScoringRequest(BaseModel):

@@ -153,27 +153,33 @@ class TestSignedMedia:
     def test_sign_requires_auth(self, public_client):
         assert public_client.get("/api/media/sign", params={"path": "a/b"}).status_code == 401
 
-    def _seed_upload_session(self, recruiter, session_id="sess-1", job_id="job-a"):
+    def _seed_upload_session(self, recruiter, job_id="job-a"):
         _create_job(recruiter, job_id, "Eng A")
-        recruiter.post("/api/sessions", json={
-            "session_id": session_id, "candidate_name": "Jane",
-            "job_title": "Eng A", "job_id": job_id,
+        cid = f"cand-{job_id}"
+        recruiter.post("/api/candidates", json={
+            "candidate_id": cid, "job_id": job_id,
+            "name": "Jane", "email": f"{job_id}@example.com",
         })
+        r = recruiter.post("/api/sessions", json={"candidate_id": cid})
+        assert r.status_code == 200, r.text
+        return r.json()["session_id"]
 
     def test_media_served_only_with_valid_signature(self, public_client, tmp_path, monkeypatch):
         import api.routes.media as media_route
 
         monkeypatch.setattr(media_route, "MEDIA_DIR", tmp_path)
-        target = tmp_path / "sess-1"
-        target.mkdir()
-        (target / "recording.bin").write_bytes(b"recording-bytes")
 
         with _auth_client() as recruiter:
-            self._seed_upload_session(recruiter)
-            url = recruiter.get("/api/media/sign", params={"path": "sess-1/recording.bin"}).json()["url"]
+            session_id = self._seed_upload_session(recruiter)
+            target = tmp_path / session_id
+            target.mkdir()
+            (target / "recording.bin").write_bytes(b"recording-bytes")
+            url = recruiter.get(
+                "/api/media/sign", params={"path": f"{session_id}/recording.bin"}
+            ).json()["url"]
 
         # Unsigned fetch -> 403.
-        assert public_client.get("/media/sess-1/recording.bin").status_code == 403
+        assert public_client.get(f"/media/{session_id}/recording.bin").status_code == 403
 
         # Signed fetch -> file served.
         resp = public_client.get(url)
@@ -187,14 +193,14 @@ class TestSignedMedia:
         (tmp_path / "secret.txt").write_text("nope")
 
         with _auth_client() as recruiter:
-            self._seed_upload_session(recruiter)
+            session_id = self._seed_upload_session(recruiter)
             # A path starting outside any media root is refused at signing.
             assert recruiter.get("/api/media/sign", params={"path": "../../secret.txt"}).status_code == 403
             # An owned session can be signed, but the traversal segments are
             # resolved away when serving — nothing outside MEDIA_DIR is ever
             # read (404) or the resolved path check refuses (403).
             url = recruiter.get(
-                "/api/media/sign", params={"path": "sess-1/../secret.txt"}
+                "/api/media/sign", params={"path": f"{session_id}/../secret.txt"}
             ).json()["url"]
         resp = public_client.get(url)
         assert resp.status_code in (403, 404)
@@ -203,14 +209,16 @@ class TestSignedMedia:
         import api.routes.media as media_route
 
         monkeypatch.setattr(media_route, "MEDIA_DIR", tmp_path)
-        target = tmp_path / "sess-9"
-        target.mkdir()
-        (target / "recording.bin").write_bytes(b"recording-bytes")
 
         with _auth_client("owner-a") as a:
-            self._seed_upload_session(a, "sess-9", "job-a")
+            session_id = self._seed_upload_session(a, "job-a")
+            target = tmp_path / session_id
+            target.mkdir()
+            (target / "recording.bin").write_bytes(b"recording-bytes")
         with _auth_client("owner-b") as b:
-            assert b.get("/api/media/sign", params={"path": "sess-9/recording.bin"}).status_code == 403
+            assert b.get(
+                "/api/media/sign", params={"path": f"{session_id}/recording.bin"}
+            ).status_code == 403
 
     def test_resume_served_only_when_owned(self, public_client, tmp_path, monkeypatch):
         import api.routes.media as media_route
@@ -353,8 +361,11 @@ class TestInterviewInviteHardening:
             "interview_token": token,
         })
         assert r.status_code == 200
-        sessions = [s for s in db.get_all_sessions() if s["session_id"] == "sess-x"]
-        assert sessions and sessions[0]["candidate_name"] == "Jane Doe"
+        # Client-supplied ids are ignored server-side; the real candidate owns the session.
+        assert not [s for s in db.get_all_sessions() if s["session_id"] == "sess-x"]
+        row = db.get_session_for_candidate(candidate["candidate_id"])
+        assert row is not None
+        assert row["candidate_name"] == "Jane Doe"
 
         # Recruiter auth tokens are not valid interview access.
         r = public_client.post("/api/candidate/start-session", json={

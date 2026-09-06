@@ -34,13 +34,18 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+from app.core.paths import get_env_file_path
+
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_ENV_PATH = PROJECT_ROOT / ".env"
 
 # .env values never override variables already set in the environment.
+# Load both the repo .env (dev) and the per-user app-data .env (packaged) so
+# operators can supply GROQ_API_KEY on a clean machine without OS env vars.
 load_dotenv(PROJECT_ENV_PATH)
+load_dotenv(get_env_file_path())
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "qwen/qwen3.6-27b"
@@ -66,7 +71,7 @@ def llm_available() -> bool:
     return _get_api_key() is not None
 
 
-def ask_llm(system_prompt: str, user_prompt: str, json_mode: bool = False) -> str:
+def ask_llm(system_prompt: str, user_prompt: str, json_mode: bool = False, temperature: float = 0.3) -> str:
     """
     Call the LLM, return raw text content of its response.
 
@@ -74,6 +79,10 @@ def ask_llm(system_prompt: str, user_prompt: str, json_mode: bool = False) -> st
     raises immediately on 4xx. Raises on total failure — callers must check
     llm_available() first and wrap this in try/except with a logged
     heuristic fallback (see scoring.py).
+
+    temperature: sampling temperature passed to the model. Deterministic
+    outputs (e.g. screening semantic scores) should pass temperature=0.0 so
+    the same resume + job always yields the same result.
     """
     api_key = _get_api_key()
     if not api_key:
@@ -85,7 +94,7 @@ def ask_llm(system_prompt: str, user_prompt: str, json_mode: bool = False) -> st
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": 0.3,
+        "temperature": temperature,
     }
     if json_mode:
         payload["response_format"] = {"type": "json_object"}

@@ -1,11 +1,45 @@
 # Deployment Guide — Remote Access via Electron
 
-This app is a **desktop application** (Electron + Next.js + FastAPI). Candidates and
-recruiters both install the same Electron app. The frontend is **never served as a
-standalone website** — this is deliberate, not an oversight: integrity checks
-(remote-access port scanning and process scanning) only produce real signals when
-they execute locally on the machine being monitored, so the candidate's interview UI
-must always run inside Electron on their own laptop.
+This app has **two surfaces**: a **desktop application** (Electron + Next.js + FastAPI)
+for recruiters, and a **public Next.js website** for external candidates.
+
+- **Recruiters** run the Electron desktop app (or local dev) as the control surface.
+  Electron can either spawn a local sidecar (`backend_mode=local`) or talk to a central
+  server (`backend_mode=remote`).
+- **External candidates do NOT install the Electron app.** They interact through the
+  public website over HTTPS — applying at `/apply?jobId=...` and taking their online
+  interview via invite codes from emailed links at `/candidate/entry?code=...`.
+
+The integrity checks (remote-access port scanning and process scanning) only produce
+real signals when they execute locally on the machine being monitored. For remote
+candidates taking a live Mode 1 interview, the interview UI still runs locally on the
+candidate's own machine; the web `/apply` and `/candidate/entry` pages are the public
+entry points into the same system.
+
+## External-candidate web deployment (candidates in the browser)
+
+| What                                 | Where it lives                       | Env var                  |
+|---------------------------------------|--------------------------------------|--------------------------|
+| Application link, `/apply`, candidate pages | `NEXT_PUBLIC_APP_URL` (frontend) | `https://<frontend-domain>` |
+| Backend API the candidate browser calls    | `NEXT_PUBLIC_API_URL` (frontend)    | `https://<backend-domain>` |
+| Public apply URL in LinkedIn posts         | `PUBLIC_APP_URL` (backend)          | `https://<frontend-domain>` |
+| CORS allow-list for the frontend origin    | `FRONTEND_ORIGIN` (backend)         | `https://<frontend-domain>` |
+| Central bind host                          | `DEPLOY_MODE=remote` (backend)      | `remote`                 |
+
+Flow:
+1. Recruiter copies the application link (built from `NEXT_PUBLIC_APP_URL`) or posts to
+   LinkedIn (built from `PUBLIC_APP_URL`). Both point at
+   `https://<frontend-domain>/apply?jobId=...`.
+2. A candidate opens that link in any browser → the public `/apply` page fetches job
+   details from `NEXT_PUBLIC_API_URL` and submits the resume to
+   `https://<backend-domain>/api/public/apply/...`.
+3. The backend screens the application and, for invited candidates, emails a link at
+   `https://<frontend-domain>/candidate/entry?code=...`.
+
+**HTTPS is required in production.** Both the frontend and backend must be served over
+HTTPS (terminate TLS with the platform's proxy or a reverse proxy). Never use
+`http://localhost` for `NEXT_PUBLIC_*` / `PUBLIC_APP_URL` / `FRONTEND_ORIGIN` in a
+real deployment — an external candidate's browser must not call its own localhost.
 
 ## Architecture overview
 

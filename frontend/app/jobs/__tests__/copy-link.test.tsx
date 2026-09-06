@@ -11,6 +11,7 @@ const apiMock = vi.hoisted(() => ({
   updateJob: vi.fn(),
   deleteJob: vi.fn(),
   checkEmailApplications: vi.fn(),
+  getLinkedinStatus: vi.fn(),
 }))
 vi.mock("@/lib/api", () => ({ api: apiMock }))
 
@@ -22,6 +23,7 @@ import JobsPage from "../page"
 const writeTextMock = vi.fn()
 beforeEach(() => {
   vi.clearAllMocks()
+  delete process.env.NEXT_PUBLIC_APP_URL
   Object.defineProperty(navigator, "clipboard", {
     value: { writeText: writeTextMock },
     configurable: true,
@@ -59,6 +61,7 @@ describe("Copy Application Link", () => {
     apiMock.getGmailStatus.mockResolvedValue({ connected: false })
     apiMock.getSettings.mockResolvedValue({ backend_mode: "local" })
     apiMock.getPollLogs.mockResolvedValue({ logs: [] })
+    apiMock.getLinkedinStatus.mockResolvedValue({ connected: false })
     writeTextMock.mockResolvedValue(undefined)
   })
 
@@ -82,6 +85,22 @@ describe("Copy Application Link", () => {
       expect(toastMock.error).toHaveBeenCalledWith("Unable to create application link: job ID is missing.")
     })
     expect(writeTextMock).not.toHaveBeenCalled()
+  })
+
+  it("uses NEXT_PUBLIC_APP_URL when configured (production public origin)", async () => {
+    try {
+      process.env.NEXT_PUBLIC_APP_URL = "https://frontend.example.com"
+      apiMock.getJobs.mockResolvedValue([makeJob({ job_id: "123" })])
+      await renderJobs()
+
+      await userEvent.click(screen.getByTitle("Copy application link"))
+
+      await waitFor(() => {
+        expect(writeTextMock).toHaveBeenCalledWith("https://frontend.example.com/apply?jobId=123")
+      })
+    } finally {
+      delete process.env.NEXT_PUBLIC_APP_URL
+    }
   })
 
   it("keeps distinct job ids per row (no accidental first-job reuse)", async () => {

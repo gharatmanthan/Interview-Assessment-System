@@ -10,7 +10,7 @@ def cc(fresh_db, public_client):
     invite, and starts a session so every candidate-scoring endpoint has a
     valid X-Interview-Token."""
 
-    def _sponsor(session_id="sess-live"):
+    def _sponsor():
         import uuid
 
         from app.core.models import Candidate, InterviewInvite, JobPosting
@@ -34,10 +34,10 @@ def cc(fresh_db, public_client):
         v = public_client.post("/api/candidate/validate-code", json={"invite_code": code})
         token = v.json()["interview_token"]
         r = public_client.post("/api/candidate/start-session", json={
-            "session_id": session_id, "interview_token": token,
+            "interview_token": token,
         })
         assert r.status_code == 200
-        return token
+        return token, r.json()["session_id"]
 
     return _sponsor
 
@@ -60,42 +60,42 @@ class TestLiveFrameEndpoints:
         assert public_client.get("/api/sessions/session-x/live-frame").status_code == 401
 
     def test_upload_then_get_roundtrip(self, public_client, client, frames_dir, cc):
-        token = cc("session-x")
+        token, sid = cc()
         res = public_client.post(
-            "/api/sessions/session-x/live-frame",
+            f"/api/sessions/{sid}/live-frame",
             content=JPEG_A,
             headers={"Content-Type": "image/jpeg", "X-Interview-Token": token},
         )
         assert res.status_code == 200
 
-        got = client.get("/api/sessions/session-x/live-frame")
+        got = client.get(f"/api/sessions/{sid}/live-frame")
         assert got.status_code == 200
         assert got.headers["content-type"] == "image/jpeg"
         assert got.content == JPEG_A
 
     def test_new_frame_overwrites_previous(self, public_client, client, frames_dir, cc):
-        token = cc("session-x")
-        public_client.post("/api/sessions/session-x/live-frame", content=JPEG_A,
+        token, sid = cc()
+        public_client.post(f"/api/sessions/{sid}/live-frame", content=JPEG_A,
                            headers={"X-Interview-Token": token})
-        public_client.post("/api/sessions/session-x/live-frame", content=JPEG_B,
+        public_client.post(f"/api/sessions/{sid}/live-frame", content=JPEG_B,
                            headers={"X-Interview-Token": token})
-        assert client.get("/api/sessions/session-x/live-frame").content == JPEG_B
+        assert client.get(f"/api/sessions/{sid}/live-frame").content == JPEG_B
 
     def test_sessions_are_isolated(self, public_client, client, frames_dir, cc):
-        token_a = cc("sess-1")
-        public_client.post("/api/sessions/sess-1/live-frame", content=JPEG_A,
+        token_a, sid_a = cc()
+        public_client.post(f"/api/sessions/{sid_a}/live-frame", content=JPEG_A,
                            headers={"X-Interview-Token": token_a})
         # second candidate for a different session
-        token_b = cc("sess-2")
-        public_client.post("/api/sessions/sess-2/live-frame", content=JPEG_B,
+        token_b, sid_b = cc()
+        public_client.post(f"/api/sessions/{sid_b}/live-frame", content=JPEG_B,
                            headers={"X-Interview-Token": token_b})
-        assert client.get("/api/sessions/sess-1/live-frame").content == JPEG_A
-        assert client.get("/api/sessions/sess-2/live-frame").content == JPEG_B
+        assert client.get(f"/api/sessions/{sid_a}/live-frame").content == JPEG_A
+        assert client.get(f"/api/sessions/{sid_b}/live-frame").content == JPEG_B
 
     def test_empty_body_rejected(self, public_client, cc):
-        token = cc("session-x")
+        token, sid = cc()
         assert public_client.post(
-            "/api/sessions/session-x/live-frame", content=b"",
+            f"/api/sessions/{sid}/live-frame", content=b"",
             headers={"X-Interview-Token": token},
         ).status_code == 400
 
@@ -121,16 +121,16 @@ class TestLiveFrameEndpoints:
 
 class TestCleanupOnCompletion:
     def test_complete_session_deletes_live_frame(self, public_client, client, frames_dir, cc):
-        token = cc("sess-live")
-        public_client.post("/api/sessions/sess-live/live-frame", content=JPEG_A,
+        token, sid = cc()
+        public_client.post(f"/api/sessions/{sid}/live-frame", content=JPEG_A,
                            headers={"X-Interview-Token": token})
-        assert (frames_dir / "sess-live.jpg").exists()
+        assert (frames_dir / f"{sid}.jpg").exists()
 
         public_client.post("/api/candidate/complete-session", json={
-            "session_id": "sess-live", "interview_token": token,
+            "session_id": sid, "interview_token": token,
         })
-        assert not (frames_dir / "sess-live.jpg").exists()
-        assert client.get("/api/sessions/sess-live/live-frame").status_code == 404
+        assert not (frames_dir / f"{sid}.jpg").exists()
+        assert client.get(f"/api/sessions/{sid}/live-frame").status_code == 404
 
     def test_late_frame_after_completion_with_valid_token_recreates_file(self, public_client, frames_dir, cc):
         """A frame arriving just after completion (from the still-running
@@ -138,9 +138,9 @@ class TestCleanupOnCompletion:
         overwrite semantics mean the file simply reappears and will be
         removed by the next poll cycle's stale sweep — acceptable per spec.
         """
-        token = cc("sess-late")
+        token, sid = cc()
         res = public_client.post(
-            "/api/sessions/sess-late/live-frame",
+            f"/api/sessions/{sid}/live-frame",
             content=JPEG_A,
             headers={"Content-Type": "image/jpeg", "X-Interview-Token": token},
         )

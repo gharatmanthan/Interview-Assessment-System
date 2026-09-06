@@ -1,6 +1,7 @@
+import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
 from api.rate_limit import rate_limited
 from api.schemas import (
@@ -10,12 +11,73 @@ from api.schemas import (
     StartSessionRequest,
     SubmitAnswerRequest,
     CompleteSessionRequest,
+    CandidateQuestionsResponse,
+    CandidateProgressResponse,
+    QuestionItem,
 )
 from app.core import db
 from app.core.models import InterviewSession
 from app.core.tokens import create_interview_token, verify_interview_token
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+def _to_question_item(q: dict) -> QuestionItem:
+    """Map a session_questions row to the QuestionItem API shape (used by both
+    the locked-set listing and the server-authoritative progress endpoint)."""
+    return QuestionItem(
+        question_index=q["question_index"],
+        question_id=q["question_id"],
+        question_text=q["question_text"],
+        category=q["category"],
+        competency=q["competency"],
+        difficulty=q["difficulty"],
+        source=q["source"],
+    )
+
+
+def _interview_progress(session_id: str) -> dict:
+    """Derive the server-authoritative Mode 2 interview progress for a session.
+
+    A question counts as ANSWERED when it has a persisted competency score
+    (scoring is the step that advances the interview). The current question is
+    the first locked question, in question_index order, without a score. This
+    makes the interview state machine refresh-proof and independent of any
+    client-held position — and it reuses the existing session_questions +
+    competency_scores tables (no new schema).
+    """
+    questions = db.get_session_questions(session_id)
+    answered = {s["question_id"] for s in db.get_session_scores(session_id)}
+    total = len(questions)
+    answered_count = sum(1 for q in questions if q["question_id"] in answered)
+
+    # Order by question_index (get_session_questions already orders by it).
+    current = None
+    for q in questions:
+        if q["question_id"] not in answered:
+            current = q
+            break
+
+    completed = total > 0 and answered_count == total
+
+    if answered_count == total and total > 0:
+        status = "completed"
+    elif answered_count > 0:
+        status = "in_progress"
+    elif total > 0:
+        status = "ready"
+    else:
+        status = "not_ready"
+
+    return {
+        "total_questions": total,
+        "answered_questions": answered_count,
+        "remaining_questions": total - answered_count,
+        "current_question": _to_question_item(current) if current else None,
+        "interview_status": status,
+        "completed": completed,
+    }
 
 
 def _invite_status(candidate: dict) -> tuple[bool, str]:
@@ -123,21 +185,28 @@ def _require_token_owns_session(req) -> tuple[str, str]:
 
 @router.post("/candidate/consent")
 def record_consent(req: ConsentRequest):
-    if not req.session_id:
-        return {"success": False, "message": "Missing required fields"}
-
     candidate_id, job_id = _identity_from_token(req)
 
     candidate = db.get_candidate(candidate_id)
     if not candidate or candidate.get("job_id") != job_id:
         raise HTTPException(status_code=401, detail="Interview access token is invalid.")
 
-    # Bind the session to the candidate now (the device-check and interview
-    # pages post integrity flags / answers for this session before any
-    # start-session call): the ownership checks across all candidate endpoints
-    # rely on candidate.session_id being set from consent onward.
-    db.update_candidate_status(candidate_id, "in_progress", session_id=req.session_id)
-    return {"success": True}
+    job = db.get_job_posting(job_id)
+    job_title = job["title"] if job else ""
+
+    # The session id is resolved server-side and is authoritative; the client
+    # must never dictate it. The device-check and interview pages then use the
+    # returned session_id, and the ownership checks across all candidate
+    # endpoints rely on candidate.session_id being set to this same value.
+    try:
+        session_id = db.resolve_or_create_session(
+            candidate_id, job_id, candidate["name"], job_title
+        )
+    except db.SessionResolutionError:
+        raise HTTPException(status_code=401, detail="Interview access token is invalid.")
+
+    db.update_candidate_status(candidate_id, "in_progress", session_id=session_id)
+    return {"success": True, "session_id": session_id}
 
 
 @router.post("/candidate/start-session", response_model=SessionResponse)
@@ -148,6 +217,21 @@ def start_candidate_session(req: StartSessionRequest):
     if not candidate or candidate.get("job_id") != job_id:
         raise HTTPException(status_code=401, detail="Interview access token is invalid.")
     candidate_name = candidate["name"]
+
+    # F-01: an already-completed interview must never be reopened. Manually
+    # created candidates do not necessarily have an interview_invites row, so
+    # _invite_status() below is NOT a sufficient guard for them. Check the
+    # server-authoritative states directly (candidate.status and the candidate's
+    # authoritative session.status) and reject BEFORE touching any state — no
+    # new session, no status flip, no completed_at clearing.
+    authoritative_session = db.get_session_for_candidate(candidate_id)
+    if candidate.get("status") == "completed" or (
+        authoritative_session and authoritative_session.get("status") == "completed"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="This interview has already been completed and cannot be reopened.",
+        )
 
     job = db.get_job_posting(job_id)
     if not job:
@@ -167,17 +251,29 @@ def start_candidate_session(req: StartSessionRequest):
             detail="Your application no longer qualifies for this interview",
         )
 
-    session = InterviewSession(
-        session_id=req.session_id,
-        candidate_name=candidate_name,
-        job_title=job_title,
-        job_id=job_id,
-        started_at=datetime.now().isoformat(),
-        status="in_progress",
-    )
+    # Resolve (or create) the single authoritative session for this candidate.
+    # The user-supplied req.session_id is ignored for authority: if the
+    # candidate already has a session (e.g. the recruiter started first, or a
+    # previous start attempt), the existing session_id is returned unchanged so
+    # recruiter and candidate always share the same InterviewSession.
+    try:
+        session_id = db.resolve_or_create_session(
+            candidate_id, job_id, candidate_name, job_title
+        )
+    except db.SessionResolutionError:
+        raise HTTPException(status_code=401, detail="Interview access token is invalid.")
+
+    session_row = db.get_session(session_id)
+    if session_row is None:
+        # Defensive: the resolver always materializes a row, but if a race
+        # leaves us pointing at a missing one, treat it as an auth failure
+        # rather than crashing on an unhashable/None payload.
+        raise HTTPException(status_code=401, detail="Interview access token is invalid.")
+    session = InterviewSession(**session_row)
+    session.status = "in_progress"
     db.save_session(session)
 
-    db.update_candidate_status(candidate_id, "in_progress", session_id=req.session_id)
+    db.update_candidate_status(candidate_id, "in_progress", session_id=session_id)
 
     # Consume the interview invite: a session start is one-time use.
     for invite in db.get_interview_invites_for_candidate(candidate_id):
@@ -190,7 +286,7 @@ def start_candidate_session(req: StartSessionRequest):
         candidate_name=session.candidate_name,
         job_title=session.job_title,
         job_id=session.job_id,
-        started_at=session.started_at,
+        started_at=str(session.started_at),
         status=session.status,
     )
 
@@ -204,7 +300,30 @@ def submit_answer(req: SubmitAnswerRequest):
 
     _require_token_owns_session(req)
 
-    rubric = retrieve_rubric("general", req.category)
+    # The submitted question_id MUST belong to this session's locked question
+    # set — a candidate can never score a question from another candidate's
+    # session or a fabricated id. This applies whenever a Mode 2 locked set
+    # exists (which is always the case for a real interview); a session with no
+    # locked set at all is a degenerate legacy case that retains prior behavior.
+    if db.session_questions_exist(req.session_id):
+        question = db.get_session_question_by_id(req.session_id, req.question_id)
+        if not question:
+            raise HTTPException(
+                status_code=403,
+                detail="Question does not belong to this interview.",
+            )
+
+    # Persist the transcript so it is never lost and so a typed-answer fallback
+    # lands in question_transcripts too. Idempotent upsert on (session_id,
+    # question_id) — a retry after a scoring failure cannot duplicate it.
+    db.save_question_transcript(req.session_id, req.question_id, req.transcript)
+
+    # Ground rubric retrieval in the ACTUAL job description for this session so
+    # RAG/LLM scoring receives the real JD context + competency rubric, matching
+    # the recruiter-side scoring path (not a generic fallback).
+    job_title, jd_text = _job_context(req.session_id)
+    rubric = retrieve_rubric(job_title or req.category, req.category, jd_text)
+
     score_result = score_answer(req.session_id, req.question_id, req.category, req.transcript, rubric)
     explanation = explain_score(req.session_id, req.question_id, req.transcript, score_result.score)
     fairness = audit_bias(req.session_id, req.question_id, req.transcript, score_result.score)
@@ -238,6 +357,22 @@ def submit_answer(req: SubmitAnswerRequest):
     }
 
 
+def _job_context(session_id: str) -> tuple[str, str]:
+    """Best-effort lookup of (job_title, job_description) for RAG retrieval —
+    mirrors the recruiter-side scoring path (api/routes/scoring.py)."""
+    session = db.get_session(session_id)
+    if not session:
+        return "", ""
+    job = db.get_job_posting(session.get("job_id")) if session.get("job_id") else None
+    if not job:
+        return session.get("job_title") or "", ""
+    description = job.get("description", "")
+    required_skills = job.get("required_skills", [])
+    if required_skills and description:
+        description = "Required skills: " + ", ".join(required_skills) + "\n\n" + description
+    return job.get("title") or "", description
+
+
 @router.post("/candidate/complete-session")
 def complete_session(req: CompleteSessionRequest):
     session_id = req.session_id
@@ -247,18 +382,50 @@ def complete_session(req: CompleteSessionRequest):
     _require_token_owns_session(req)
 
     session = db.get_session(session_id)
-    if session:
-        session["status"] = "completed"
-        session["completed_at"] = datetime.now().isoformat()
-        db.save_session(InterviewSession(**session))
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
 
-        if session.get("job_id"):
-            candidates = db.get_all_candidates()
-            candidate = next(
-                (c for c in candidates if c.get("session_id") == session_id), None
+    # Server-authoritative completion: the candidate cannot mark the interview
+    # completed unless EVERY locked question has been scored. This prevents a
+    # forged completion (e.g. skipping questions) by a partially-finished
+    # candidate, and doubles as the "final question submitted -> COMPLETED"
+    # transition once the last answer lands.
+    progress = _interview_progress(session_id)
+    if progress["total_questions"] > 0 and not progress["completed"]:
+        raise HTTPException(
+            status_code=409,
+            detail="Interview cannot be completed until every question has been answered.",
+        )
+
+    session["status"] = "completed"
+    session["completed_at"] = datetime.now().isoformat()
+    db.save_session(InterviewSession(**session))
+
+    candidates = db.get_all_candidates()
+    candidate = next(
+        (c for c in candidates if c.get("session_id") == session_id), None
+    )
+    if candidate:
+        db.update_candidate_status(candidate["candidate_id"], "completed")
+
+    # Interview-mode routing: a Mode 2 candidate's completion may close the
+    # job's Mode 2 cohort. When every Mode 2 candidate has finished, the cohort
+    # is ranked and the top LIVE_INTERVIEW_CAPACITY are promoted to Mode 1
+    # (notifications cached on outbox, never sent inline here). Atomic/safe:
+    # ranking is idempotent and a failure must never break session completion.
+    if candidate and candidate.get("interview_mode") == "MODE_2":
+        try:
+            from app.screening.routing import on_mode2_candidate_completed
+
+            on_mode2_candidate_completed(
+                candidate["job_id"], candidate["candidate_id"]
             )
-            if candidate:
-                db.update_candidate_status(candidate["candidate_id"], "completed")
+        except Exception as exc:  # pragma: no cover - defensive only
+            logger.error(
+                "mode 2 cohort ranking failed for candidate %s: %s",
+                candidate["candidate_id"],
+                exc,
+            )
 
     # The real recording is (or will shortly be) in Reports — drop the stale
     # live-preview frame so the monitor shows the feed as ended. A frame
@@ -268,3 +435,96 @@ def complete_session(req: CompleteSessionRequest):
     delete_live_frame(session_id)
 
     return {"success": True}
+
+
+@router.get("/candidate/questions", response_model=CandidateQuestionsResponse)
+def get_candidate_questions(
+    x_interview_token: str = Header(default=""),
+):
+    """Retrieve the locked question set for the candidate's session.
+
+    Auth: X-Interview-Token — derives candidate_id/job_id from the token,
+    resolves the authoritative session, and returns only that session's
+    questions.
+    """
+    identity = verify_interview_token(x_interview_token)
+    if not identity:
+        raise HTTPException(status_code=401, detail="Invalid interview token.")
+    candidate_id, job_id = identity
+
+    candidate = db.get_candidate(candidate_id)
+    if not candidate or candidate.get("job_id") != job_id:
+        raise HTTPException(status_code=401, detail="Invalid interview token.")
+
+    session_id = candidate.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=404, detail="No active session found.")
+
+    session = db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    questions = db.get_session_questions(session_id)
+    if not questions:
+        raise HTTPException(
+            status_code=404,
+            detail="No questions have been prepared for this interview yet. "
+                   "Please wait for the recruiter.",
+        )
+
+    return CandidateQuestionsResponse(
+        session_id=session_id,
+        questions=[_to_question_item(q) for q in questions],
+    )
+
+
+@router.get("/candidate/progress", response_model=CandidateProgressResponse)
+def get_candidate_interview_progress(
+    x_interview_token: str = Header(default=""),
+):
+    """Server-authoritative Mode 2 interview progress for the authenticated
+    candidate. Powers refresh/reconnect recovery: the candidate restores their
+    current question from here, never from browser sessionStorage. A refresh
+    immediately after the interview loads / after each submit returns the true
+    server position.
+
+    Auth: X-Interview-Token — derives candidate_id/job_id and resolves the
+    candidate's authoritative session.
+    """
+    identity = verify_interview_token(x_interview_token)
+    if not identity:
+        raise HTTPException(status_code=401, detail="Invalid interview token.")
+    candidate_id, job_id = identity
+
+    candidate = db.get_candidate(candidate_id)
+    if not candidate or candidate.get("job_id") != job_id:
+        raise HTTPException(status_code=401, detail="Invalid interview token.")
+
+    session_id = candidate.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=404, detail="No active session found.")
+
+    # An already-completed interview stays completed — the candidate cannot
+    # restart or re-enter a finished interview through progress.
+    session = db.get_session(session_id)
+    if session and session.get("status") == "completed":
+        return CandidateProgressResponse(
+            session_id=session_id,
+            interview_status="completed",
+            total_questions=len(db.get_session_questions(session_id)),
+            answered_questions=len(db.get_session_questions(session_id)),
+            remaining_questions=0,
+            current_question=None,
+            completed=True,
+        )
+
+    p = _interview_progress(session_id)
+    return CandidateProgressResponse(
+        session_id=session_id,
+        interview_status=p["interview_status"],
+        total_questions=p["total_questions"],
+        answered_questions=p["answered_questions"],
+        remaining_questions=p["remaining_questions"],
+        current_question=p["current_question"],
+        completed=p["completed"],
+    )

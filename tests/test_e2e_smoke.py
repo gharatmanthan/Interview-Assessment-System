@@ -57,15 +57,24 @@ class TestEndToEndSmoke:
         assert apps[0]["screening_status"] == "completed"
         assert apps[0]["candidate_id"]
 
+        # 2b. The recruiting side confirms the interview-mode strategy, which is
+        # the gate that releases the candidate invite (Mode 1, within capacity).
+        from app.screening.routing import finalize_cohort_if_ready
+        status = finalize_cohort_if_ready("job-e2e")
+        assert status["cohort_finalized"] is True
+        from app.screening.routing import confirm_strategy
+        confirm_strategy("job-e2e", "AUTO")
+
         # 3. Candidate created with a consumable invite; invite queued in outbox.
         candidates = db.get_all_candidates()
         assert len(candidates) == 1
         cand = candidates[0]
         assert cand["status"] == "invited"
         assert cand["invite_code"]
+        assert cand["interview_mode"] == "MODE_1"
 
         pending = db.get_pending_notifications()
-        assert any(n["notification_type"] == "interview_invite" for n in pending)
+        assert any(n["notification_type"] == "mode1_invite" for n in pending)
         assert all(n["status"] == "pending" for n in pending)
 
         # 4. Outbox drains via Gmail (stubbed send).
@@ -86,19 +95,21 @@ class TestEndToEndSmoke:
         token = v.json()["interview_token"]
 
         consent = public_client.post("/api/candidate/consent", json={
-            "session_id": "sess-e2e", "interview_token": token,
+            "interview_token": token,
         })
         assert consent.json()["success"] is True
+        session_id = consent.json()["session_id"]
 
         start = public_client.post("/api/candidate/start-session", json={
-            "session_id": "sess-e2e", "interview_token": token,
+            "interview_token": token,
         })
         assert start.status_code == 200
+        assert start.json()["session_id"] == session_id
         assert db.get_interview_invites_for_candidate(cand["candidate_id"])[0]["status"] == "consumed"
 
         # 6. Answer is scored (heuristic fallback, no LLM key required).
         answer = public_client.post("/api/candidate/submit-answer", json={
-            "session_id": "sess-e2e",
+            "session_id": session_id,
             "question_id": "q-e2e",
             "category": "algorithms",
             "transcript": "I would use a hash map for O(1) lookups and a sliding window over the array.",
@@ -109,10 +120,10 @@ class TestEndToEndSmoke:
 
         # 7. Session completes.
         done = public_client.post("/api/candidate/complete-session", json={
-            "session_id": "sess-e2e", "interview_token": token,
+            "session_id": session_id, "interview_token": token,
         })
         assert done.json()["success"] is True
-        assert db.get_session("sess-e2e")["status"] == "completed"
+        assert db.get_session(session_id)["status"] == "completed"
 
         # 8. Recruiter sees the completed application with a screening result.
         detail = client.get(f"/api/applications/{application_id}").json()

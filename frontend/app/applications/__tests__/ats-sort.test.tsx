@@ -5,6 +5,7 @@ const apiMock = vi.hoisted(() => ({
   getApplications: vi.fn(),
   getJobs: vi.fn(),
   getApplicationStats: vi.fn(),
+  getCandidates: vi.fn(),
 }))
 vi.mock("@/lib/api", () => ({
   api: apiMock,
@@ -57,6 +58,7 @@ describe("Applications default ATS sort", () => {
       competency_weights: {}, screening_threshold: 60, application_gmail_label: "",
     }])
     apiMock.getApplicationStats.mockResolvedValue({ jobs: [] })
+    apiMock.getCandidates.mockResolvedValue([])
 
     render(<ApplicationsPage />)
     await waitFor(() => {
@@ -80,6 +82,7 @@ describe("Applications default ATS sort", () => {
     })
     apiMock.getJobs.mockResolvedValue([])
     apiMock.getApplicationStats.mockResolvedValue({ jobs: [] })
+    apiMock.getCandidates.mockResolvedValue([])
 
     render(<ApplicationsPage />)
     await waitFor(() => {

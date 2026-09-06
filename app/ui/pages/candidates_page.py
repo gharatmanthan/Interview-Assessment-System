@@ -26,8 +26,9 @@ from PySide6.QtCore import Qt
 
 from app.core import db
 from app.core.models import Candidate
+from app.core.paths import get_resumes_dir
 
-RESUME_DIR = Path(__file__).parent.parent.parent.parent / "data" / "resumes"
+RESUME_DIR = get_resumes_dir()
 
 STATUS_COLORS = {
     "invited": ("#EEF2FF", "#4338CA"),

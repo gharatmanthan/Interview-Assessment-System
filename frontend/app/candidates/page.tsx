@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from "react"
 import { toast } from "sonner"
 import { api } from "@/lib/api"
+import { isValidEmail } from "@/lib/email"
 import type { Candidate, JobPosting } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -38,6 +39,26 @@ const screeningConfig: Record<string, { label: string; variant: "default" | "sec
   pending: { label: "Pending", variant: "outline" },
   passed_threshold: { label: "Passed", variant: "success" },
   below_threshold: { label: "Below Threshold", variant: "warning" },
+}
+
+function modeStatusLabel(status: string): string {
+  switch (status) {
+    case "SHORTLISTED": return "Shortlisted"
+    case "CONFIRMED": return "Confirmed"
+    case "INVITED": return "Invited"
+    case "COMPLETED": return "Completed"
+    case "PROMOTED": return "Promoted to Mode 1"
+    case "NOT_PROMOTED": return "Not promoted"
+    default: return status
+  }
+}
+
+function promotionBadgeTone(status: string): string {
+  switch (status) {
+    case "PROMOTED": return "text-success-text"
+    case "NOT_PROMOTED": return "text-muted-foreground"
+    default: return "text-muted-foreground"
+  }
 }
 
 export default function CandidatesPage() {
@@ -90,6 +111,10 @@ export default function CandidatesPage() {
 
   async function handleInvite(e: React.FormEvent) {
     e.preventDefault()
+    if (!isValidEmail(inviteForm.email)) {
+      toast.error("Please enter a valid email address.")
+      return
+    }
     setInviteLoading(true)
     try {
       const candidate_id = Date.now().toString()
@@ -179,7 +204,7 @@ export default function CandidatesPage() {
   const jobsWithLabels = jobs.filter((j) => j.application_gmail_label)
 
   return (
-    <div className="min-h-screen bg-background p-8">
+    <div className="space-y-6 px-8 py-6">
       <div className="mx-auto max-w-6xl space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -248,6 +273,9 @@ export default function CandidatesPage() {
                     <TableHead>Status</TableHead>
                     <TableHead>Source</TableHead>
                     <TableHead>Screening</TableHead>
+                    <TableHead>Mode</TableHead>
+                    <TableHead>Mode 2 Score</TableHead>
+                    <TableHead>Rank</TableHead>
                     <TableHead>Invite Code</TableHead>
                     <TableHead>Match Score</TableHead>
                     <TableHead>Skills</TableHead>
@@ -607,6 +635,36 @@ function CandidateRow({
             <span title="Invite email failed to send — use Resend"><AlertTriangle className="h-3.5 w-3.5 text-warning" /></span>
           )}
         </div>
+      </TableCell>
+      <TableCell>
+        {c.interview_mode ? (
+          <div className="flex flex-col gap-1">
+            <Badge variant={c.interview_mode === "MODE_1" ? "default" : "secondary"} className="w-fit">
+              {c.interview_mode.replace("_", " ")}
+            </Badge>
+            {c.mode_status ? (
+              <span className={`text-[10px] ${promotionBadgeTone(c.mode_status)}`}>
+                {modeStatusLabel(c.mode_status)}
+              </span>
+            ) : null}
+          </div>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </TableCell>
+      <TableCell>
+        {c.mode2_score != null ? (
+          <span className="text-sm tabular-nums text-foreground">{c.mode2_score.toFixed(1)}</span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </TableCell>
+      <TableCell>
+        {c.rank != null ? (
+          <span className="text-sm font-medium tabular-nums text-foreground">#{c.rank}</span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
       </TableCell>
       <TableCell>
         <code className="rounded bg-muted px-2 py-0.5 text-xs font-mono text-foreground">

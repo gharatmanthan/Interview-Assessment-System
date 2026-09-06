@@ -63,6 +63,16 @@ describe("Apply page", () => {
     })
   })
 
+  it("shows an unreachable-server message (NOT Job Not Found) when the backend fetch fails", async () => {
+    mockFetch.mockRejectedValueOnce(new TypeError("Failed to fetch"))
+    render(<ApplyPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText("Unable to Load This Job")).toBeInTheDocument()
+    })
+    expect(screen.queryByText("Job Not Found")).not.toBeInTheDocument()
+  })
+
   it("shows invalid application link when no query param", async () => {
     mockGetSearchParam.mockImplementation(() => null)
     render(<ApplyPage />)
@@ -139,6 +149,33 @@ describe("Apply page", () => {
     expect(screen.queryByText("75")).not.toBeInTheDocument()
     expect(screen.queryByText("test-code")).not.toBeInTheDocument()
     expect(screen.queryByText(/passed/i)).not.toBeInTheDocument()
+  })
+
+  it("blocks submission with an invalid email and shows validation error", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(JOB_DATA) })
+
+    const user = userEvent.setup()
+    render(<ApplyPage />)
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Full Name")).toBeInTheDocument()
+    })
+
+    await user.type(screen.getByLabelText("Full Name"), "Jane Doe")
+    await user.type(screen.getByLabelText("Email"), "invalid-email")
+
+    const fileInput = screen.getByLabelText(/Resume/)
+    const file = new File(["resume content"], "resume.pdf", { type: "application/pdf" })
+    uploadFile(fileInput, file)
+
+    const form = fileInput.closest("form")!
+    fireEvent.submit(form)
+
+    await waitFor(() => {
+      expect(screen.getByText(/valid email/i)).toBeInTheDocument()
+    })
+
+    expect(mockFetch).toHaveBeenCalledTimes(1) // only the job fetch, no POST
   })
 
   it("shows error message on failed submission", async () => {

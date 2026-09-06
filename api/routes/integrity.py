@@ -74,12 +74,20 @@ def list_bias_flags(username: str = Depends(get_current_recruiter)):
 @router.websocket("/ws/integrity/{session_id}")
 async def integrity_ws(websocket: WebSocket, session_id: str):
     """Recruiter-only live integrity feed. The recruiter's Bearer token must be
-    passed as ?token=... because browsers can't set headers on WebSockets."""
+    passed as ?token=... because browsers can't set headers on WebSockets.
+
+    The recruiter must OWN the session's job (derive candidate -> job ->
+    created_by) before the feed is opened; a valid token alone is not enough.
+    """
     token = websocket.query_params.get("token", "")
     username = verify_token(token)
     if not username:
         await websocket.accept()
         await websocket.close(code=4401, reason="Authentication required")
+        return
+    if not db.get_owned_session(username, session_id):
+        await websocket.accept()
+        await websocket.close(code=4403, reason="Not authorized for this session")
         return
     await websocket.accept()
     monitor = ExternalDeviceMonitor(session_id)

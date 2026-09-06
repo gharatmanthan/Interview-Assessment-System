@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Briefcase, CheckCircle, AlertCircle } from "lucide-react"
 import { getBaseUrl } from "@/lib/api"
+import { isValidEmail } from "@/lib/email"
 
 interface PublicJob {
   job_id: string
@@ -43,10 +44,17 @@ export default function ApplyPage() {
       try {
         const base = await getBaseUrl()
         const res = await fetch(`${base}/api/public/jobs/${jobId}`)
-        if (!res.ok) throw new Error("not-found")
+        if (res.status === 404) {
+          setError("not-found")
+          return
+        }
+        if (!res.ok) throw new Error("server-error")
         setJob(await res.json())
       } catch (err: any) {
-        setError(err.message === "not-found" ? "not-found" : err.message || "not-found")
+        // A network failure (backend unreachable, CORS, connection refused)
+        // is NOT "job not found" — surfacing the real cause is much more useful
+        // than blaming the job link, which is the confusing current behavior.
+        setError(err?.message === "server-error" ? "server-error" : "unreachable")
       } finally {
         setLoading(false)
       }
@@ -57,6 +65,10 @@ export default function ApplyPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!file) return
+    if (!isValidEmail(email)) {
+      setSubmitError("Please enter a valid email address.")
+      return
+    }
     setSubmitting(true)
     setSubmitError(null)
     try {
@@ -91,14 +103,28 @@ export default function ApplyPage() {
 
   if (error && !job) {
     const isInvalidLink = error === "invalid-link"
+    const isUnreachable = error === "unreachable"
+    const isServerError = error === "server-error"
+    const heading = isInvalidLink
+      ? "Invalid Application Link"
+      : isUnreachable || isServerError
+        ? "Unable to Load This Job"
+        : "Job Not Found"
+    const message = isInvalidLink
+      ? "This link is missing a job ID. Check the link or contact the recruiter."
+      : isUnreachable
+        ? "The application server could not be reached. Please try again in a moment, or contact the recruiter."
+        : isServerError
+          ? "The application server returned an error. Please try again later."
+          : "The job you're looking for doesn't exist or has been removed."
     return (
       <div className="flex items-center justify-center min-h-screen bg-background">
         <Card className="w-full max-w-md">
           <CardContent className="pt-6 text-center">
             <AlertCircle className="h-12 w-12 text-destructive mx-auto mb-4" />
-            <p className="text-lg font-medium text-foreground">{isInvalidLink ? "Invalid Application Link" : "Job Not Found"}</p>
+            <p className="text-lg font-medium text-foreground">{heading}</p>
             <p className="text-sm text-muted-foreground mt-1">
-              {isInvalidLink ? "This link is missing a job ID. Check the link or contact the recruiter." : "The job you're looking for doesn't exist or has been removed."}
+              {message}
             </p>
           </CardContent>
         </Card>

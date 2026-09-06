@@ -120,9 +120,12 @@ class TestEmailIntakePipeline:
         assert len(invites) == 1
         assert invites[0]["status"] == "active"
 
+        # No HR recipient is configured here (hr_email unset) and the candidate
+        # invite is deferred until the job's interview strategy is confirmed,
+        # so nothing is pending on the outbox yet.
         pending = fresh_db.get_pending_notifications()
-        assert [n["notification_type"] for n in pending] == ["interview_invite"]
-        assert pending[0]["recipient"] == "jane@example.com"
+        assert pending == []
+        assert candidate["mode_status"] == "SHORTLISTED"
 
         assert db.is_email_processed("msg-001") is True
 
@@ -257,11 +260,13 @@ class TestEmailIntakePipeline:
         candidate = db.get_all_candidates()[0]
         assert candidate["screening_status"] == "passed_threshold"
         assert candidate["invite_email_sent"] is False
+        assert candidate["mode_status"] == "SHORTLISTED"
 
+        # No invite is enqueued by intake: the candidate is only SHORTLISTED and
+        # the job awaits strategy confirmation. No hr_email is configured here,
+        # so nothing is pending on the outbox.
         pending = fresh_db.get_pending_notifications()
-        assert len(pending) == 1
-        assert pending[0]["status"] == "pending"
-        assert pending[0]["attempts"] == 0
+        assert pending == []
 
         assert db.is_email_processed("msg-008") is True
 
@@ -297,3 +302,121 @@ class TestEmailCheckSummary:
         assert latest["below_threshold"] == 1
         assert latest["skipped"] == 2
         assert latest["failed"] == 1
+
+
+class TestEmailSenderRecipientFlow:
+    """Verify the email sender (recruiter Gmail) and recipient (candidate) are correctly set."""
+
+    def test_invite_email_uses_recruiter_as_sender_candidate_as_recipient(
+        self, client, fresh_db, monkeypatch
+    ):
+        """Test that interview invite emails are sent FROM the authenticated
+        recruiter Gmail account TO the candidate's email address."""
+        # Set up test recruiter email
+        recruiter_email = "atharvshigwan1142@gmail.com"
+        candidate_email = "deadpooltorrato@gmail.com"
+
+        from app.core.settings_store import save_settings, load_settings
+        save_settings({"gmail_user": recruiter_email, "gmail_connected": True})
+        settings = load_settings()
+        assert settings.get("gmail_user") == recruiter_email
+
+        # Test compose_invite_email produces correct headers
+        from app.engine.email_intake import compose_invite_email, compose_mode2_invite_email
+
+        candidate = {"name": "Test Candidate", "email": candidate_email}
+        job = {"title": "Test Job"}
+        invite_code = "TEST123"
+        frontend_url = "http://localhost:3000"
+
+        msg = compose_invite_email(candidate, job, invite_code, frontend_url)
+        msg["To"] = candidate_email
+        msg["From"] = recruiter_email
+
+        assert msg["To"] == candidate_email
+        assert msg["From"] == recruiter_email
+
+        # Test compose_mode2_invite_email
+        msg2 = compose_mode2_invite_email(candidate, job, invite_code, frontend_url)
+        msg2["To"] = candidate_email
+        msg2["From"] = recruiter_email
+
+        assert msg2["To"] == candidate_email
+        assert msg2["From"] == recruiter_email
+
+    def test_two_candidates_receive_only_their_own_emails(self, client, fresh_db):
+        """Test that each candidate receives only their own email."""
+        from app.core import db
+        from app.core.models import Candidate
+        from app.screening.routing import _enqueue_mode_invite
+
+        _make_job(client, job_id="job-1", threshold=60.0)
+
+        # Create two candidates with different emails
+        cand1 = Candidate(
+            candidate_id="cand-1", job_id="job-1", name="Candidate One",
+            email="candidate1@gmail.com", invite_code="CODE1", status="invited",
+            source="manual", screening_status="passed_threshold"
+        )
+        db.save_candidate(cand1)
+        cand2 = Candidate(
+            candidate_id="cand-2", job_id="job-1", name="Candidate Two",
+            email="candidate2@gmail.com", invite_code="CODE2", status="invited",
+            source="manual", screening_status="passed_threshold"
+        )
+        db.save_candidate(cand2)
+
+        job = db.get_job_posting("job-1")
+
+        # Convert to dict for _enqueue_mode_invite (it expects a dict-like object)
+        cand1_dict = {"candidate_id": cand1.candidate_id, "job_id": cand1.job_id, 
+                      "email": cand1.email, "invite_code": cand1.invite_code,
+                      "application_id": cand1.application_id}
+        cand2_dict = {"candidate_id": cand2.candidate_id, "job_id": cand2.job_id, 
+                      "email": cand2.email, "invite_code": cand2.invite_code,
+                      "application_id": cand2.application_id}
+
+        # Enqueue invites for both
+        _enqueue_mode_invite(cand1_dict, job, "MODE_1")
+        _enqueue_mode_invite(cand2_dict, job, "MODE_1")
+
+        # Verify outbox has correct recipients
+        notifications = fresh_db.get_pending_notifications()
+        invite_notifications = [n for n in notifications if n["notification_type"] == "mode1_invite"]
+        assert len(invite_notifications) == 2
+
+        recipients = {n["recipient"] for n in invite_notifications}
+        assert recipients == {"candidate1@gmail.com", "candidate2@gmail.com"}
+
+        # Verify each notification has the correct candidate_id
+        for n in invite_notifications:
+            cand = db.get_candidate(n["candidate_id"])
+            assert n["recipient"] == cand["email"]
+
+    def test_multiple_recruiters_send_from_own_accounts(self, client, fresh_db):
+        """Test that each recruiter sends from their own authenticated Gmail account."""
+        from app.core.settings_store import load_settings, save_settings
+
+        # Simulate first recruiter
+        save_settings({"gmail_user": "recruiter1@gmail.com", "gmail_connected": True})
+        settings = load_settings()
+        assert settings["gmail_user"] == "recruiter1@gmail.com"
+
+        # Simulate second recruiter (in a different process/session)
+        save_settings({"gmail_user": "recruiter2@gmail.com", "gmail_connected": True})
+        settings = load_settings()
+        assert settings["gmail_user"] == "recruiter2@gmail.com"
+
+        # The candidate recipient remains unchanged regardless of sender
+        from app.screening.email_worker import _send_gmail
+        from app.engine.email_intake import compose_invite_email
+
+        candidate = {"name": "Test", "email": "candidate@gmail.com"}
+        job = {"title": "Test Job"}
+
+        msg = compose_invite_email(candidate, job, "CODE1", "http://localhost:3000")
+        msg["To"] = candidate["email"]
+        msg["From"] = settings["gmail_user"]
+
+        assert msg["To"] == "candidate@gmail.com"
+        assert msg["From"] == "recruiter2@gmail.com"

@@ -11,6 +11,7 @@ Flow:
    the recruiter's calendar as a booking event, so future auto-schedules naturally
    avoid it.
 """
+import os
 import base64
 import logging
 from datetime import datetime, timedelta
@@ -58,7 +59,13 @@ def run_calendar_oauth_flow() -> str:
             "Download it from Google Cloud Console and place it in data/."
         )
     flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_PATH), SCOPES)
-    creds = flow.run_local_server(port=0)
+    # Use configured redirect URI if provided
+    redirect_uri = os.environ.get("CALENDAR_REDIRECT_URI", "").strip()
+    if redirect_uri:
+        flow.redirect_uri = redirect_uri
+        creds = flow.run_local_server(port=0)
+    else:
+        creds = flow.run_local_server(port=0)
     service = build("calendar", "v3", credentials=creds)
     about = service.calendarList().get(calendarId="primary").execute()
     email = about.get("id", "")

@@ -7,21 +7,31 @@ import os
 import asyncio
 import argparse
 import logging
-from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core import db
+from app.core.database import get_database_engine
+from app.core.paths import get_uploads_dir
 from api.routes import (
     auth, jobs, candidates, sessions, scoring, reports, integrity, settings,
     devices, candidate_flow, email_intake, public_apply, scheduling,
-    applications, media,
+    applications, media, linkedin, questions, live,
 )
-
 logger = logging.getLogger(__name__)
 
 _bg_poll_task = None
+
+
+def _workers_enabled() -> bool:
+    """Check if in-process workers should run."""
+    return os.environ.get("INTERVIEWIQ_DISABLE_WORKERS", "") != "1"
+
+
+def _is_remote_mode() -> bool:
+    """Check if running in remote/deployed mode."""
+    return os.environ.get("DEPLOY_MODE") == "remote"
 
 
 async def _background_poll():
@@ -68,22 +78,37 @@ async def _background_poll():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Initialize database
     db.init_db()
-    from app.screening.worker import start_workers, workers_enabled
-    # Start the screening + email-outbox workers (daemon threads) unless the
-    # operator disabled them (tests do) — otherwise they'd race our callers.
-    start_workers()
+    
+    # Get database engine for health checks
+    engine = get_database_engine()
+    
+    # Start in-process workers unless disabled
+    if _workers_enabled():
+        from app.screening.worker import start_workers
+        start_workers()
+        logger.info("In-process workers started (screening, outbox)")
+    else:
+        logger.info("In-process workers disabled (INTERVIEWIQ_DISABLE_WORKERS=1)")
+    
+    # Start background Gmail poll for remote mode
     global _bg_poll_task
     _bg_poll_task = None
-    if workers_enabled():
+    if _workers_enabled() and _is_remote_mode():
         _bg_poll_task = asyncio.create_task(_background_poll())
+        logger.info("Background Gmail polling started")
+    
     yield
+    
+    # Cleanup
     if _bg_poll_task:
         _bg_poll_task.cancel()
         try:
             await _bg_poll_task
         except asyncio.CancelledError:
             pass
+    logger.info("Application shutting down")
 
 
 app = FastAPI(
@@ -127,16 +152,15 @@ app.include_router(email_intake.router, prefix="/api/email-intake", tags=["email
 app.include_router(public_apply.router, prefix="/api/public", tags=["public-apply"])
 app.include_router(scheduling.router, prefix="/api/scheduling", tags=["scheduling"])
 app.include_router(applications.router, prefix="/api/applications", tags=["applications"])
+app.include_router(linkedin.router, prefix="/api/integrations/linkedin", tags=["linkedin-integration"])
+app.include_router(questions.router, prefix="/api/questions", tags=["questions"])
+app.include_router(live.router, prefix="/api", tags=["live-interview"])
 app.include_router(media.router, prefix="/api/media", tags=["media"])
 
 
 # Uploaded interview recordings (data/uploads/<session_id>/<file>) are served
 # back through signed URLs so only authenticated recruiters can load them,
 # even when the central server runs on a different machine.
-MEDIA_DIR = Path(__file__).parent.parent / "data" / "uploads"
-MEDIA_DIR.mkdir(parents=True, exist_ok=True)
-
-
 @app.get("/media/{path:path}")
 def media_file(request: Request, path: str):
     """Signed media route: /media/{path}?sig=...&exp=..."""
@@ -147,7 +171,53 @@ def media_file(request: Request, path: str):
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    """Health check endpoint with diagnostic information.
+    
+    Returns:
+        JSON with status, database connectivity, storage backend, worker mode,
+        and deployment configuration. Does not expose secrets.
+    """
+    from app.core.database import get_database_engine
+    from app.core.storage import get_storage
+    
+    # Check database connectivity
+    db_status = "unknown"
+    db_type = "unknown"
+    try:
+        engine = get_database_engine()
+        with engine.connect() as conn:
+            conn.execute("SELECT 1")
+        db_status = "connected"
+        db_type = "postgresql" if engine.is_postgresql else "sqlite"
+    except Exception as e:
+        db_status = f"error: {type(e).__name__}"
+        logger.warning("Health check: database error: %s", e)
+    
+    # Get storage backend info
+    storage = get_storage()
+    storage_type = type(storage).__name__
+    if storage_type == "S3FileStorage":
+        storage_info = {"backend": "s3", "bucket": storage.bucket}
+    else:
+        storage_info = {"backend": "local", "path": str(storage.base_dir)}
+    
+    # Worker status
+    workers_disabled = os.environ.get("INTERVIEWIQ_DISABLE_WORKERS", "") == "1"
+    worker_mode = "disabled" if workers_disabled else "in_process"
+    
+    # Deployment mode
+    deploy_mode = "remote" if _is_remote_mode() else "local"
+    
+    return {
+        "status": "ok" if db_status == "connected" else "degraded",
+        "database": {
+            "status": db_status,
+            "type": db_type,
+        },
+        "storage": storage_info,
+        "workers": worker_mode,
+        "deploy_mode": deploy_mode,
+    }
 
 
 if __name__ == "__main__":

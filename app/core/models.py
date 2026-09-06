@@ -102,6 +102,15 @@ class Candidate:
     screening_status: str = "pending"   # "pending" | "passed_threshold" | "below_threshold"
     invite_email_sent: bool = False     # True only after confirmed Gmail send success
     application_id: Optional[str] = None  # links a candidate back to the application that created them
+    # Interview-mode routing progression ('' until assigned).
+    interview_mode: str = ""
+    mode_status: str = ""
+    mode2_score: Optional[float] = None
+    overall_score: Optional[float] = None
+    rank: Optional[int] = None
+    ranked_at: Optional[str] = None
+    promoted_at: Optional[str] = None
+    mode_assignment_source: str = ""
 
 
 @dataclass
@@ -233,6 +242,15 @@ class JobPosting:
     })  # configurable ATS component weights (percent, should sum to 100)
     created_by: str = "recruiter"           # owning recruiter username (authorization root)
 
+    # Interview-mode allocation (hybrid routing workflow). AUTO follows the
+    # final shortlist count; the recruiter explicitly confirms before any
+    # invitations are generated.
+    interview_strategy: str = "AUTO"          # AUTO | MODE_1_ONLY | MODE_2_THEN_MODE_1
+    recommended_strategy: str = ""            # computed recommendation (AUTO)
+    strategy_confirmed: bool = False
+    strategy_confirmed_at: str = ""
+    cohort_finalized_at: str = ""
+
 
 @dataclass
 class InterviewSession:
@@ -251,6 +269,7 @@ class InterviewSession:
     started_at: datetime = field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None
     status: str = "in_progress"   # "in_progress" | "scoring" | "complete"
+    live_question_id: str = ""   # Phase 3A: currently-active question ('' = none)
 
 
 @dataclass
@@ -262,3 +281,23 @@ class ProcessedEmail:
     job_id: str
     candidate_id: Optional[str] = None     # None if resume parsing failed before Candidate creation
     processed_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass
+class LinkedinConnection:
+    """One recruiter's LinkedIn OAuth connection (member posting).
+
+    Stored per recruiter in SQLite (not the machine-global settings.json) so
+    Recruiter A can never see or reuse Recruiter B's LinkedIn token. The author
+    identity is derived server-side from the authenticated member (never from
+    the frontend)."
+    """
+    recruiter_username: str
+    linkedin_member_id: str
+    member_name: str = ""
+    member_email: str = ""
+    access_token: str = ""
+    refresh_token: str = ""
+    token_expires_at: str = ""
+    scope: str = ""
+    connected_at: datetime = field(default_factory=datetime.utcnow)

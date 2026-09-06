@@ -44,7 +44,12 @@ class TestHealth:
     def test_health_ok(self, client):
         resp = client.get("/health")
         assert resp.status_code == 200
-        assert resp.json() == {"status": "ok"}
+        data = resp.json()
+        assert data["status"] in ("ok", "degraded")
+        assert "database" in data
+        assert "storage" in data
+        assert "workers" in data
+        assert "deploy_mode" in data
 
 
 class TestAuthApi:
@@ -117,6 +122,45 @@ class TestCandidatesApi:
         assert listed[0]["invite_code"] == code
         assert listed[0]["status"] == "invited"
 
+    def test_create_enqueues_invite_email_and_active_invite(self, client):
+        create_job(client)
+        created = create_candidate(client)
+
+        assert created.status_code == 200
+
+        # A manual invite must reach the candidate by email: an outbox
+        # 'interview_invite' message must be queued carrying the invite code.
+        notification = db.get_pending_notifications()
+        invites = [n for n in notification if n["notification_type"] == "interview_invite"
+                   and n["candidate_id"] == "cand-1"]
+        assert len(invites) == 1
+        assert invites[0]["recipient"] == "jane@example.com"
+        assert invites[0]["body"] == created.json()["invite_code"]
+        assert invites[0]["status"] == "pending"
+
+        # And a single active one-time interview invite row must exist.
+        rows = db.get_interview_invites_for_candidate("cand-1")
+        assert len(rows) == 1
+        assert rows[0]["status"] == "active"
+
+    def test_create_without_email_rejected_by_validation(self, client):
+        create_job(client)
+        resp = client.post("/api/candidates", json={
+            "candidate_id": "cand-noemail",
+            "job_id": "job-1",
+            "name": "No Email",
+            "email": "",
+        })
+        assert resp.status_code == 422
+        assert db.get_candidate("cand-noemail") is None
+        assert db.get_pending_notifications() == []
+
+    def test_delete_candidate(self, client):
+        create_job(client)
+        create_candidate(client)
+        client.delete("/api/candidates/cand-1")
+        assert client.get("/api/candidates").json() == []
+
     def test_list_candidates_for_job_filter(self, client):
         create_job(client)
         create_job(client, job_id="job-2", title="Other Role")
@@ -162,12 +206,6 @@ class TestCandidatesApi:
         assert len(rows) == 1
         assert rows[0]["status"] == "active"
 
-    def test_delete_candidate(self, client):
-        create_job(client)
-        create_candidate(client)
-        client.delete("/api/candidates/cand-1")
-        assert client.get("/api/candidates").json() == []
-
     def test_upload_resume_parses_and_matches_against_job(self, client):
         create_job(client, description="We need python and sql skills; kubernetes a plus.")
         create_candidate(client)
@@ -184,10 +222,17 @@ class TestCandidatesApi:
         assert body["experience_years"] == 3.0
         assert body["matched_skills"] == ["python", "sql"]
         assert body["missing_skills"] == ["kubernetes"]
-        assert body["match_score"] == round(2 / 3 * 100, 1)
+        # Canonical ATS pipeline: overall = weighted component score, i.e. 85.7
+# (skills 100 + semantic 66.7 + keyword 66.7, applied weights), NOT the bare
+# matcher match_score of 66.7. The persisted ScreeningResult must agree with
+# candidates.match_score.
+        assert body["match_score"] == 85.7
+        assert body["screening_result"]["ats_score"] == 85.7
+        assert body["screening_result"]["decision"] == "passed"
+        assert body["screening_result"]["matcher_method"] == "keyword_overlap"
 
         stored = db.get_all_candidates()[0]
-        assert stored["match_score"] == round(2 / 3 * 100, 1)
+        assert stored["match_score"] == 85.7
 
 
 class TestCandidateFlowApi:
@@ -227,32 +272,34 @@ class TestCandidateFlowApi:
         token = client.post("/api/candidate/validate-code", json={"invite_code": code}).json()["interview_token"]
 
         missing = client.post("/api/candidate/consent", json={})
-        assert missing.status_code == 422
+        assert missing.status_code == 401
 
         denied = client.post("/api/candidate/consent", json={"session_id": "s1"})
         assert denied.status_code == 401
 
-        ok = client.post("/api/candidate/consent", json={
-            "session_id": "s1", "interview_token": token,
-        })
-        assert ok.json() == {"success": True}
+        ok = client.post("/api/candidate/consent", json={"interview_token": token})
+        body = ok.json()
+        assert body["success"] is True
+        assert body["session_id"]
         assert db.get_all_candidates()[0]["status"] == "in_progress"
+        # The server is authoritative: the client's made-up session id is ignored.
+        assert db.get_all_candidates()[0]["session_id"] == body["session_id"]
 
     def test_start_session_resolves_names_and_links_candidate(self, client):
         code = self.seed_invited_candidate(client)
         token = client.post("/api/candidate/validate-code", json={"invite_code": code}).json()["interview_token"]
 
-        resp = client.post("/api/candidate/start-session", json={
-            "session_id": "sess-1", "interview_token": token,
-        })
+        resp = client.post("/api/candidate/start-session", json={"interview_token": token})
         body = resp.json()
         assert body["candidate_name"] == "Jane Doe"
         assert body["job_title"] == "Backend Engineer"
         assert body["status"] == "in_progress"
+        assert body["session_id"]
 
         candidate = db.get_all_candidates()[0]
         assert candidate["status"] == "in_progress"
-        assert candidate["session_id"] == "sess-1"
+        assert candidate["session_id"] == body["session_id"]
+        assert db.get_session(body["session_id"]) is not None
 
     def test_submit_answer_scores_explains_and_persists(self, client):
         transcript = (
@@ -261,11 +308,10 @@ class TestCandidateFlowApi:
         )
         code = self.seed_invited_candidate(client)
         token = client.post("/api/candidate/validate-code", json={"invite_code": code}).json()["interview_token"]
-        client.post("/api/candidate/start-session", json={
-            "session_id": "sess-1", "interview_token": token,
-        })
+        start = client.post("/api/candidate/start-session", json={"interview_token": token}).json()
+        session_id = start["session_id"]
         resp = client.post("/api/candidate/submit-answer", json={
-            "session_id": "sess-1",
+            "session_id": session_id,
             "question_id": "q1",
             "category": "dsa",
             "transcript": transcript,
@@ -278,22 +324,24 @@ class TestCandidateFlowApi:
         assert "No LLM key is configured" in body["explanation"]["summary"]
         assert body["fairness"]["score_delta"] == 0.0
 
-        assert len(db.get_session_scores("sess-1")) == 1
-        assert len(db.get_session_explanations("sess-1")) == 1
+        assert len(db.get_session_scores(session_id)) == 1
+        assert len(db.get_session_explanations(session_id)) == 1
         assert len(db.get_all_fairness_flags()) == 1
 
     def test_complete_session_marks_session_and_candidate_done(self, client):
         code = self.seed_invited_candidate(client)
         token = client.post("/api/candidate/validate-code", json={"invite_code": code}).json()["interview_token"]
-        client.post("/api/candidate/start-session", json={
-            "session_id": "sess-1", "interview_token": token,
-        })
+        start = client.post("/api/candidate/start-session", json={"interview_token": token}).json()
+        session_id = start["session_id"]
 
         missing = client.post("/api/candidate/complete-session", json={})
         assert missing.status_code == 422
 
+        no_token = client.post("/api/candidate/complete-session", json={"session_id": session_id})
+        assert no_token.status_code == 401
+
         done = client.post("/api/candidate/complete-session", json={
-            "session_id": "sess-1", "interview_token": token,
+            "session_id": session_id, "interview_token": token,
         })
         assert done.json() == {"success": True}
 
@@ -301,6 +349,44 @@ class TestCandidateFlowApi:
         assert session["status"] == "completed"
         assert session["completed_at"] is not None
         assert db.get_all_candidates()[0]["status"] == "completed"
+
+    def test_completed_session_cannot_be_reopened_with_valid_token(self, client):
+        # Manual candidate has no interview_invites row, so _invite_status() is
+        # a no-op here — the exact F-01 hole where a completed interview could
+        # regress back to in_progress via a still-valid token.
+        code = self.seed_invited_candidate(client)
+        token = client.post("/api/candidate/validate-code", json={"invite_code": code}).json()["interview_token"]
+
+        start = client.post("/api/candidate/start-session", json={"interview_token": token})
+        assert start.status_code == 200
+        session_id = start.json()["session_id"]
+
+        done = client.post("/api/candidate/complete-session", json={
+            "session_id": session_id, "interview_token": token,
+        })
+        assert done.json() == {"success": True}
+
+        def candidate_row():
+            return db.get_candidate(db.get_all_candidates()[0]["candidate_id"])
+
+        session = db.get_session(session_id)
+        assert session["status"] == "completed"
+        assert session["completed_at"] is not None
+        assert candidate_row()["status"] == "completed"
+        before_completed_at = session["completed_at"]
+
+        # Reuse the SAME still-valid interview token.
+        reopened = client.post("/api/candidate/start-session", json={"interview_token": token})
+        assert reopened.status_code == 409
+
+        # State must be unchanged: no regress to in_progress, no new session,
+        # completed_at preserved, answers/scores untouched.
+        session = db.get_session(session_id)
+        assert session["status"] == "completed"
+        assert session["completed_at"] == before_completed_at
+        assert candidate_row()["status"] == "completed"
+        assert candidate_row()["session_id"] == session_id
+        assert len(db.get_all_sessions()) == 1
 
 
 class TestSessionsAndScoringApi:
@@ -311,16 +397,16 @@ class TestSessionsAndScoringApi:
             "name": "Jane", "email": "jane@example.com",
         })
         created = client.post("/api/sessions", json={
-            "session_id": "sess-1", "candidate_name": "Jane", "job_title": "BE",
-            "job_id": "job-1",
+            "candidate_id": "cand-1",
         })
         assert created.status_code == 200
-        # Link the session to the candidate so ownership resolves.
-        db.update_candidate_status("cand-1", "invited", session_id="sess-1")
+        # The server resolves the authoritative session and links the candidate,
+        # so ownership resolves without any manual session_id wiring.
+        session_id = created.json()["session_id"]
 
         rows = client.get("/api/sessions").json()
         assert len(rows) == 1
-        assert rows[0]["session_id"] == "sess-1"
+        assert rows[0]["session_id"] == session_id
         assert rows[0]["status"] == "in_progress"
 
     def test_scoring_run_persists_all_three_outputs(self, client):

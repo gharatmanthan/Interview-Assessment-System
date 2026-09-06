@@ -1,4 +1,4 @@
-import type { JobPosting, JobCreateInput, Candidate, InterviewSession, DashboardStats, CompetencyScore, Explanation, FairnessFlag, IntegrityFlag, CandidateReport, ComparisonRow, Settings, DeviceInfo, InviteValidation, GmailStatus, GmailConnectResult, EmailCheckResult, PollLogEntry, CalendarStatus, CalendarConnectResult, ScheduledInterview, ApplicationDetail, JobPipelineStat } from './types'
+import type { JobPosting, JobCreateInput, Candidate, InterviewSession, DashboardStats, CompetencyScore, Explanation, FairnessFlag, IntegrityFlag, CandidateReport, ComparisonRow, Settings, DeviceInfo, InviteValidation, GmailStatus, GmailConnectResult, EmailCheckResult, PollLogEntry, CalendarStatus, CalendarConnectResult, ScheduledInterview, ApplicationDetail, JobPipelineStat, LinkedInStatus, LinkedInConnectResult, LinkedInPreview, LinkedInPublishResult, TranscriptionResponse, QuestionItem, SelectQuestionsResponse, CandidateQuestionsResponse, CandidateProgressResponse, InterviewStatusResponse, JobStrategyStatus, JobStrategyConfirmInput } from './types'
 
 let cachedBaseUrl: string | null = null
 
@@ -45,18 +45,25 @@ function authHeaders(): Record<string, string> {
  * Electron's main process decides where shared-data traffic goes:
  * - backend_mode "local": the FastAPI sidecar it spawned on a random port
  * - backend_mode "remote": the central deployed server (remote_api_url)
- * The URL reaches the renderer through preload (contextBridge). Outside
- * Electron (plain `next dev` in a browser tab) this falls back to :8000,
- * which is only ever a development convenience — the frontend is not
- * meant to be served as a standalone website.
+ * The URL reaches the renderer through preload (contextBridge).
+ *
+ * Outside Electron, the frontend is served as a public website for external
+ * candidates, and the backend origin is provided via NEXT_PUBLIC_API_URL.
+ * Without it, localhost:8000 is only a development convenience.
  */
 export async function getBaseUrl(): Promise<string> {
   if (cachedBaseUrl) return cachedBaseUrl
   const w = typeof window !== 'undefined' ? (window as any) : undefined
   if (w?.appConfig?.getApiBaseUrl) {
+    // Electron host resolves its backend target (local sidecar or remote server).
     cachedBaseUrl = await w.appConfig.getApiBaseUrl()
   } else {
-    cachedBaseUrl = `http://localhost:${w?.__API_PORT__ || 8000}`
+    // Plain web deployment: the backend origin is set at build/runtime via
+    // NEXT_PUBLIC_API_URL. Never fall back to a machine-localhost backend in
+    // production — an external candidate's browser must not call its own host.
+    cachedBaseUrl =
+      (process.env.NEXT_PUBLIC_API_URL?.trim().replace(/\/+$/, '')) ||
+      `http://localhost:${w?.__API_PORT__ || 8000}`
   }
   return cachedBaseUrl!
 }
@@ -164,6 +171,14 @@ export const api = {
   deleteJob: (job_id: string) =>
     request<{ success: boolean }>(`/api/jobs/${job_id}`, { method: 'DELETE' }),
 
+  // Interview-mode strategy (job-level)
+  getJobInterviewModeStatus: (job_id: string) =>
+    request<JobStrategyStatus>(`/api/jobs/${job_id}/interview-mode/status`),
+  confirmJobInterviewMode: (job_id: string, strategy: JobStrategyConfirmInput) =>
+    request<JobStrategyStatus>(`/api/jobs/${job_id}/interview-mode/confirm`, {
+      method: 'POST', body: JSON.stringify(strategy),
+    }),
+
   // Candidates
   getCandidates: () => request<Candidate[]>('/api/candidates'),
   getCandidatesForJob: (job_id: string) => request<Candidate[]>(`/api/candidates/job/${job_id}`),
@@ -181,7 +196,7 @@ export const api = {
 
   // Sessions
   getSessions: () => request<InterviewSession[]>('/api/sessions'),
-  createSession: (data: { session_id: string; candidate_name: string; job_title: string; job_id?: string }) =>
+  createSession: (data: { candidate_id: string }) =>
     request<InterviewSession>('/api/sessions', { method: 'POST', body: JSON.stringify(data) }),
   uploadRecording: async (
     session_id: string,
@@ -191,12 +206,41 @@ export const api = {
     const formData = new FormData()
     if (files.video) formData.append('video', files.video, filenames?.video || `${session_id}_video.webm`)
     if (files.audio) formData.append('audio', files.audio, filenames?.audio || `${session_id}_audio.webm`)
-    return requestForm<{ success: boolean; saved: Record<string, string> }>(
-      `/api/sessions/${session_id}/upload`,
+      return requestForm<{ success: boolean; saved: Record<string, string> }>(
+        `/api/sessions/${session_id}/upload`,
+        formData,
+        getInterviewTokenHeader()
+      )
+  },
+
+  transcribeSession: async (session_id: string, question_id: string, audio: Blob) => {
+    const formData = new FormData()
+    const ext = audio.type.includes("webm") ? "webm" : audio.type.includes("mp3") ? "mp3" : "wav"
+    formData.append("question_id", question_id)
+    formData.append("audio", audio, `${session_id}_${question_id}.${ext}`)
+    return requestForm<TranscriptionResponse>(
+      `/api/sessions/${session_id}/transcribe`,
       formData,
       getInterviewTokenHeader()
     )
   },
+
+  // Question engine (MODE 2 structured screening)
+  selectQuestions: (session_id: string, num_questions: number = 10, force_generated: boolean = false) =>
+    request<SelectQuestionsResponse>('/api/questions/select', {
+      method: 'POST',
+      body: JSON.stringify({ session_id, num_questions, force_generated }),
+    }),
+  getCandidateQuestions: () =>
+    request<CandidateQuestionsResponse>('/api/candidate/questions', {
+      headers: getInterviewTokenHeader(),
+    }),
+  getCandidateProgress: () =>
+    request<CandidateProgressResponse>('/api/candidate/progress', {
+      headers: getInterviewTokenHeader(),
+    }),
+  getCandidateInterviewStatus: (candidate_id: string) =>
+    request<InterviewStatusResponse>(`/api/candidates/${candidate_id}/interview-status`),
 
   // Live monitor preview frames
   uploadLiveFrame: async (session_id: string, blob: Blob) => {
@@ -261,10 +305,18 @@ export const api = {
     request<InviteValidation>('/api/candidate/validate-code', {
       method: 'POST', body: JSON.stringify({ invite_code }),
     }),
-  recordConsent: (session_id: string, candidate_id: string, interview_token: string) =>
-    request<{ success: boolean }>('/api/candidate/consent', {
-      method: 'POST', body: JSON.stringify({ session_id, candidate_id, interview_token }),
-    }),
+  recordConsent: async (candidate_id: string, interview_token: string) => {
+    const res = await request<{ success: boolean; session_id?: string }>('/api/candidate/consent', {
+      method: 'POST', body: JSON.stringify({ candidate_id, interview_token }),
+    })
+    // The server resolves the authoritative session id and returns it here.
+    // Persist it so the interview page (and device-check) use the SAME session
+    // the server holds — never a client-fabricated one.
+    if (res.session_id && typeof window !== 'undefined') {
+      window.sessionStorage.setItem('session_id', res.session_id)
+    }
+    return res
+  },
   startCandidateSession: (session_id: string, candidate_id: string, job_id: string, interview_token: string) =>
     request<InterviewSession>('/api/candidate/start-session', {
       method: 'POST', body: JSON.stringify({ session_id, candidate_id, job_id, interview_token }),
@@ -317,5 +369,16 @@ export const api = {
   rescreenApplication: (applicationId: string) =>
     request<{ success: boolean; application_id: string; screening_status: string }>(`/api/applications/${applicationId}/rescreen`, {
       method: 'POST',
+    }),
+
+  // LinkedIn Integration (member posting)
+  getLinkedinStatus: () => request<LinkedInStatus>('/api/integrations/linkedin/status'),
+  connectLinkedin: () => request<LinkedInConnectResult>('/api/integrations/linkedin/connect'),
+  disconnectLinkedin: () => request<{ success: boolean; message: string }>('/api/integrations/linkedin/disconnect', { method: 'POST' }),
+  getLinkedinPreview: (job_id: string) =>
+    request<LinkedInPreview>(`/api/jobs/${job_id}/linkedin/preview`, { method: 'POST' }),
+  publishLinkedinPost: (job_id: string, content: string) =>
+    request<LinkedInPublishResult>(`/api/jobs/${job_id}/linkedin/publish`, {
+      method: 'POST', body: JSON.stringify({ content }),
     }),
 }

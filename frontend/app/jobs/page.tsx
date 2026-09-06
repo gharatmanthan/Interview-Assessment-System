@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
 import { api } from "@/lib/api"
-import type { JobPosting, PollLogEntry } from "@/lib/types"
+import type { JobPosting, PollLogEntry, LinkedInPreview } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -20,9 +20,10 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog"
-import { Pencil, Trash2, Plus, Briefcase, Mail, Loader2, History, Info, Link, Check } from "lucide-react"
+import { Pencil, Trash2, Plus, Briefcase, Mail, Loader2, History, Info, Link, Check, Linkedin, ExternalLink, RefreshCw, Share2 } from "lucide-react"
 import { SkillTagInput } from "@/components/skill-tag-input"
 import { EmptyState } from "@/components/empty-state"
+import InterviewStrategyDialog from "@/components/interview-strategy-dialog"
 
 const COMPETENCY_KEYS = [
   "dsa",
@@ -50,6 +51,8 @@ const EMPTY_WEIGHTS: Record<string, number> = {
   domain_knowledge: 20,
   problem_solving: 20,
 }
+
+const MAX_LINKEDIN_CHARS = 3000
 
 function emptyForm(): Omit<JobPosting, "job_id"> {
   return {
@@ -82,6 +85,13 @@ export default function JobsPage() {
   const [showPollLogs, setShowPollLogs] = useState(false)
   const [backendMode, setBackendMode] = useState<string>("local")
   const [copiedJobId, setCopiedJobId] = useState<string | null>(null)
+  const [linkedinConnected, setLinkedinConnected] = useState(false)
+  const [linkedinJob, setLinkedinJob] = useState<JobPosting | null>(null)
+  const [preview, setPreview] = useState<LinkedInPreview | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [publishing, setPublishing] = useState(false)
+  const [editingContent, setEditingContent] = useState("")
+  const [strategyTarget, setStrategyTarget] = useState<JobPosting | null>(null)
 
   async function fetchJobs() {
     try {
@@ -101,6 +111,7 @@ export default function JobsPage() {
     api.getGmailStatus().then((s) => setGmailConnected(s.connected)).catch(() => {})
     api.getSettings().then((s) => setBackendMode((s as any).backend_mode || "local")).catch(() => {})
     api.getPollLogs().then((r) => setPollLogs(r.logs)).catch(() => {})
+    api.getLinkedinStatus().then((s) => setLinkedinConnected(s.connected)).catch(() => {})
   }, [])
 
   const weightSum = Object.values(form.competency_weights).reduce((a, b) => a + b, 0)
@@ -193,11 +204,127 @@ export default function JobsPage() {
       toast.error("Unable to create application link: job ID is missing.")
       return
     }
-    const url = `${window.location.origin}/apply?jobId=${encodeURIComponent(jobId)}`
+    // Public application origin: NEXT_PUBLIC_APP_URL is the source of truth in
+    // production. Fall back to the current window origin only in development so
+    // a copied link is never incorrectly built from a machine-local origin that
+    // external candidates cannot reach.
+    const appBase = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/+$/, "") || window.location.origin
+    const url = `${appBase}/apply?jobId=${encodeURIComponent(jobId)}`
     await navigator.clipboard.writeText(url)
     setCopiedJobId(jobId)
     toast.success("Application link copied to clipboard")
     setTimeout(() => setCopiedJobId(null), 2000)
+  }
+
+  async function openLinkedin(job: JobPosting) {
+    if (job.linkedin_post_status === "PUBLISHED" && job.linkedin_post_url) {
+      window.open(job.linkedin_post_url, "_blank", "noopener,noreferrer")
+      return
+    }
+    if (job.linkedin_post_status === "PUBLISHING") {
+      toast.info("A LinkedIn post is already being published for this job.")
+      return
+    }
+    setLinkedinJob(job)
+    setPreview(null)
+    setEditingContent("")
+    setPreviewLoading(true)
+    try {
+      const p = await api.getLinkedinPreview(job.job_id)
+      setPreview(p)
+      setEditingContent(p.content)
+      setLinkedinConnected(p.connected)
+    } catch (err: any) {
+      toast.error(err.message || "Failed to prepare the post")
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  async function handlePublish() {
+    if (!linkedinJob || !preview) return
+    const content = editingContent.trim()
+    if (!content) {
+      toast.error("Post content must not be empty")
+      return
+    }
+    if (content.length > MAX_LINKEDIN_CHARS) {
+      toast.error(`Post content must be at most ${MAX_LINKEDIN_CHARS} characters`)
+      return
+    }
+    setPublishing(true)
+    try {
+      const res = await api.publishLinkedinPost(linkedinJob.job_id, content)
+      toast.success("Posted to LinkedIn")
+      await fetchJobs()
+      setLinkedinJob(null)
+      setPreview(null)
+      if (res.post_url) window.open(res.post_url, "_blank", "noopener,noreferrer")
+    } catch (err: any) {
+      const msg = err?.message || "Failed to post"
+      toast.error(msg)
+      if (/verify/i.test(msg)) {
+        toast.info("Check LinkedIn to confirm the post, then retry if it is missing.")
+      }
+      await fetchJobs()
+    } finally {
+      setPublishing(false)
+    }
+  }
+
+  function interviewStrategyBadge(job: JobPosting) {
+    const confirmed = job.strategy_confirmed
+    const strategy = job.interview_strategy || job.recommended_strategy
+    const label =
+      strategy === "MODE_1_ONLY" ? "Mode 1 Only"
+      : strategy === "MODE_2_THEN_MODE_1" ? "Mode 2 → Mode 1"
+      : "Automatic"
+    return (
+      <button
+        type="button"
+        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:underline"
+        onClick={() => setStrategyTarget(job)}
+        title="Configure interview strategy"
+      >
+        <Share2 className="h-3.5 w-3.5" />
+        <span>{confirmed ? label : strategy ? `Rec: ${label}` : "Set strategy"}</span>
+        {confirmed && <Check className="h-3 w-3 text-success-text" />}
+      </button>
+    )
+  }
+
+  function linkedinStatusBadge(job: JobPosting) {
+    const status = job.linkedin_post_status || "NOT_POSTED"
+    if (status === "PUBLISHED") {
+      return (
+        <a
+          className="inline-flex items-center gap-1 text-xs font-medium text-success-text hover:underline"
+          href={job.linkedin_post_url || undefined}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <Check className="h-3.5 w-3.5" /> Posted
+        </a>
+      )
+    }
+    if (status === "PUBLISHING") {
+      return (
+        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Publishing
+        </span>
+      )
+    }
+    if (status === "FAILED") {
+      return (
+        <span
+          className="inline-flex items-center gap-1 text-xs font-medium text-destructive"
+          title={job.linkedin_last_error || "LinkedIn rejected the post"}
+        >
+          <RefreshCw className="h-3.5 w-3.5" /> Failed
+        </span>
+      )
+    }
+    return <span className="text-xs text-muted-foreground">—</span>
   }
 
   function updateWeight(key: string, value: number) {
@@ -366,6 +493,8 @@ export default function JobsPage() {
                   <TableHead>Experience Level</TableHead>
                   <TableHead>Skills</TableHead>
                   <TableHead>Created</TableHead>
+                  <TableHead>Interview Strategy</TableHead>
+                  <TableHead>LinkedIn</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -382,8 +511,27 @@ export default function JobsPage() {
                       </div>
                     </TableCell>
                     <TableCell>{job.created_at ? new Date(job.created_at).toLocaleDateString() : "—"}</TableCell>
+                    <TableCell>{interviewStrategyBadge(job)}</TableCell>
+                    <TableCell>{linkedinStatusBadge(job)}</TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          title={
+                            job.linkedin_post_status === "PUBLISHED"
+                              ? "Open LinkedIn post"
+                              : "Post this job on LinkedIn"
+                          }
+                          onClick={() => openLinkedin(job)}
+                        >
+                          {previewLoading && linkedinJob?.job_id === job.job_id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Linkedin className="h-4 w-4" />
+                          )}
+                        </Button>
                         <Button
                           variant="ghost"
                           size="icon"
@@ -495,6 +643,88 @@ export default function JobsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={!!linkedinJob} onOpenChange={(open) => { if (!open) { setLinkedinJob(null); setPreview(null) } }}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Linkedin className="h-5 w-5" /> Post on LinkedIn
+              {linkedinJob && linkedinJob.linkedin_post_status === "FAILED" && (
+                <Badge variant="destructive" className="text-xs">Retry after failure</Badge>
+              )}
+            </DialogTitle>
+            <DialogDescription>
+              Review and edit the draft before publishing to your LinkedIn feed.
+            </DialogDescription>
+          </DialogHeader>
+
+          {previewLoading ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : !preview ? null : (
+            <div className="space-y-4">
+              <textarea
+                value={editingContent}
+                onChange={(e) => setEditingContent(e.target.value)}
+                rows={12}
+                className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              />
+              <div className={`text-xs ${editingContent.length > MAX_LINKEDIN_CHARS ? "text-destructive" : "text-muted-foreground"}`}>
+                {editingContent.length}/{MAX_LINKEDIN_CHARS} characters
+              </div>
+              <div className="flex items-center justify-between rounded-md border border-border bg-muted/50 px-3 py-2">
+                <span className="text-xs text-muted-foreground">Public application link</span>
+                <a className="text-xs font-medium text-primary hover:underline" href={preview.public_url} target="_blank" rel="noopener noreferrer">
+                  {preview.public_url}
+                </a>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="items-center">
+            {!preview && !previewLoading ? null : (
+              <div className="flex w-full items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  {!linkedinConnected ? (
+                    <span className="text-xs text-muted-foreground">
+                      No LinkedIn account connected.{" "}
+                      <a className="font-medium text-primary underline" href="/settings">
+                        Connect in Settings
+                      </a>
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Check className="h-3.5 w-3.5 text-success-text" /> Will post as your LinkedIn profile
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" onClick={() => { setLinkedinJob(null); setPreview(null) }}>
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handlePublish}
+                    disabled={!linkedinConnected || publishing || !editingContent.trim() || editingContent.length > MAX_LINKEDIN_CHARS}
+                  >
+                    {publishing ? <><Loader2 className="h-4 w-4 animate-spin mr-1.5" /> Publishing</> : (
+                      <><ExternalLink className="h-4 w-4 mr-1.5" /> Publish to LinkedIn</>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <InterviewStrategyDialog
+        jobId={strategyTarget?.job_id ?? ""}
+        jobTitle={strategyTarget?.title ?? ""}
+        open={!!strategyTarget}
+        onOpenChange={(open) => { if (!open) setStrategyTarget(null) }}
+        onConfirmed={() => fetchJobs()}
+      />
     </div>
   )
 }

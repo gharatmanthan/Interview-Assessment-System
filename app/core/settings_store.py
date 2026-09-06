@@ -7,9 +7,41 @@ provider config, export preferences. Deliberately not in the SQLite DB
 since this is app-level config, not interview data.
 """
 import json
+import os
 from pathlib import Path
+from urllib.parse import quote
 
-SETTINGS_PATH = Path(__file__).parent.parent.parent / "data" / "settings.json"
+from dotenv import load_dotenv
+
+from app.core.paths import get_settings_path, get_env_file_path
+
+SETTINGS_PATH = get_settings_path()
+PROJECT_ROOT_ENV = SETTINGS_PATH.parent.parent / ".env"
+
+load_dotenv(PROJECT_ROOT_ENV)
+load_dotenv(get_env_file_path())
+
+
+def frontend_base_url() -> str:
+    """Public origin of the frontend app (where /apply, /settings live).
+
+    PUBLISHED via PUBLIC_APP_URL env (the deployed frontend origin); falls back
+    to the local dev origin. Do NOT fall back to remote_api_url: that is the
+    API origin and does not serve the Next.js routes.
+    """
+    base = os.environ.get("PUBLIC_APP_URL", "").strip().rstrip("/")
+    if not base:
+        base = "http://localhost:3000"
+    return base
+
+
+def public_apply_url(job_id: str) -> str:
+    """Fully public application link served by the existing public portal:
+    /apply?jobId=<job_id> (the apply page is unauthenticated and already
+    exposes job_id via the recruiter's copy-link). Never requires recruiter
+    auth and never leaks screening data.
+    """
+    return f"{frontend_base_url()}/apply?jobId={quote(job_id, safe='')}"
 
 # Fields that used to mirror the OAuth client id/secret from
 # client_secret.json into settings. They are no longer written, and any

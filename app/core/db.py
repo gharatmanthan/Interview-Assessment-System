@@ -1,5 +1,5 @@
 """
-Shared SQLite persistence layer.
+Shared persistence layer — supports both SQLite (dev/local) and PostgreSQL (production).
 
 Owner: Member C (owns the schema), but every module calls into this —
 that's expected and fine. The rule is: add a new save_x()/get_x() function
@@ -8,7 +8,6 @@ here if you need one, don't reach into another file's internals.
 This is intentionally a thin wrapper (no ORM) so it's easy for all three
 of you to read at a glance.
 """
-import sqlite3
 import json
 import hashlib
 import secrets
@@ -16,251 +15,203 @@ import uuid
 from pathlib import Path
 from dataclasses import asdict
 from datetime import datetime, timedelta
+from typing import Optional
 
-DB_PATH = Path(__file__).parent.parent.parent / "data" / "app.db"
+from app.core.database import get_db, get_database_engine, init_db as _init_db
+from app.core.paths import get_db_path
+
+DB_PATH = get_db_path()
 
 
 def get_connection():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    # Referential integrity + WAL for the screening/outbox workflow. Existing
-    # tables predate FK declarations so this is additive, not breaking.
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    return conn
+    """Backward-compatible function — returns a new connection each time.
+    
+    This is kept for any code that directly calls get_connection()
+    but all new code should use the context manager from app.core.database
+    """
+    engine = get_database_engine()
+    if engine.is_postgresql:
+        return engine._get_pg_connection()
+    else:
+        return engine.new_sqlite_connection()
+
+
+def close_connection():
+    """Close the persistent connection (for testing)."""
+    engine = get_database_engine()
+    engine.close()
 
 
 def init_db():
-    conn = get_connection()
-    conn.executescript("""
-    CREATE TABLE IF NOT EXISTS recruiter_users (
-        username TEXT PRIMARY KEY,
-        password_hash TEXT,
-        full_name TEXT,
-        created_at TEXT
-    );
-    CREATE TABLE IF NOT EXISTS candidates (
-        candidate_id TEXT PRIMARY KEY,
-        job_id TEXT,
-        name TEXT,
-        email TEXT,
-        invite_code TEXT UNIQUE,
-        status TEXT,
-        session_id TEXT,
-        invited_at TEXT,
-        resume_path TEXT,
-        resume_skills TEXT,
-        experience_years REAL,
-        match_score REAL,
-        matched_skills TEXT,
-        missing_skills TEXT
-    );
-    CREATE TABLE IF NOT EXISTS job_postings (
-        job_id TEXT PRIMARY KEY,
-        title TEXT,
-        description TEXT,
-        required_skills TEXT,
-        experience_level TEXT,
-        department TEXT,
-        num_rounds INTEGER,
-        time_limit_seconds INTEGER,
-        adaptive_difficulty INTEGER,
-        competency_weights TEXT,
-        created_at TEXT
-    );
-    CREATE TABLE IF NOT EXISTS sessions (
-        session_id TEXT PRIMARY KEY,
-        candidate_name TEXT,
-        job_title TEXT,
-        job_id TEXT,
-        video_path TEXT,
-        audio_path TEXT,
-        transcript TEXT,
-        started_at TEXT,
-        completed_at TEXT,
-        status TEXT
-    );
-    CREATE TABLE IF NOT EXISTS integrity_flags (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT,
-        flag_type TEXT,
-        detail TEXT,
-        severity TEXT,
-        timestamp TEXT
-    );
-    CREATE TABLE IF NOT EXISTS competency_scores (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT,
-        question_id TEXT,
-        category TEXT,
-        score REAL,
-        confidence REAL
-    );
-    CREATE TABLE IF NOT EXISTS explanations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT,
-        question_id TEXT,
-        summary TEXT,
-        supporting_phrases TEXT
-    );
-    CREATE TABLE IF NOT EXISTS fairness_flags (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT,
-        question_id TEXT,
-        score_delta REAL,
-        note TEXT
-    );
-    CREATE TABLE IF NOT EXISTS candidate_accounts (
-        candidate_id TEXT PRIMARY KEY,
-        password_hash TEXT NOT NULL,
-        full_name TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS live_interviews (
-        session_id TEXT PRIMARY KEY,
-        candidate_id TEXT NOT NULL,
-        candidate_name TEXT NOT NULL,
-        question TEXT NOT NULL,
-        question_index INTEGER NOT NULL DEFAULT 0,
-        transcript TEXT NOT NULL DEFAULT '',
-        status TEXT NOT NULL DEFAULT 'live',
-        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS processed_emails (
-        message_id TEXT PRIMARY KEY,
-        job_id TEXT NOT NULL,
-        candidate_id TEXT,
-        processed_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS email_poll_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        run_at TEXT NOT NULL,
-        job_id TEXT NOT NULL,
-        job_title TEXT NOT NULL,
-        total_checked INTEGER NOT NULL DEFAULT 0,
-        invited INTEGER NOT NULL DEFAULT 0,
-        below_threshold INTEGER NOT NULL DEFAULT 0,
-        skipped INTEGER NOT NULL DEFAULT 0,
-        failed INTEGER NOT NULL DEFAULT 0,
-        mode TEXT NOT NULL DEFAULT 'auto'
-    );
-    CREATE TABLE IF NOT EXISTS scheduled_interviews (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        candidate_id TEXT UNIQUE NOT NULL,
-        job_id TEXT NOT NULL,
-        scheduled_at TEXT NOT NULL,
-        duration_minutes INTEGER NOT NULL DEFAULT 45,
-        gcal_event_id TEXT,
-        status TEXT NOT NULL DEFAULT 'scheduled',
-        created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS applications (
-        application_id TEXT PRIMARY KEY,
-        job_id TEXT NOT NULL,
-        full_name TEXT NOT NULL,
-        email TEXT NOT NULL,
-        phone TEXT NOT NULL DEFAULT '',
-        resume_path TEXT NOT NULL DEFAULT '',
-        source TEXT NOT NULL DEFAULT 'apply_portal',
-        status TEXT NOT NULL DEFAULT 'received',
-        screening_status TEXT NOT NULL DEFAULT 'queued',
-        candidate_id TEXT,
-        submitted_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_applications_job ON applications(job_id);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_applications_email_job ON applications(email, job_id);
-    CREATE TABLE IF NOT EXISTS screening_jobs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        application_id TEXT NOT NULL UNIQUE,
-        status TEXT NOT NULL DEFAULT 'queued',
-        attempts INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        started_at TEXT,
-        completed_at TEXT,
-        last_error TEXT
-    );
-    CREATE TABLE IF NOT EXISTS screening_results (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        application_id TEXT NOT NULL UNIQUE,
-        ats_score REAL,
-        skills_score REAL,
-        experience_score REAL,
-        semantic_score REAL,
-        education_score REAL,
-        keyword_score REAL,
-        matched_skills TEXT NOT NULL DEFAULT '[]',
-        missing_skills TEXT NOT NULL DEFAULT '[]',
-        hard_requirements_passed INTEGER NOT NULL DEFAULT 0,
-        hard_requirement_failures TEXT NOT NULL DEFAULT '[]',
-        decision TEXT NOT NULL DEFAULT 'rejected',
-        decision_reason TEXT NOT NULL DEFAULT '',
-        threshold_used REAL,
-        scoring_method TEXT NOT NULL DEFAULT '',
-        matcher_method TEXT NOT NULL DEFAULT '',
-        confidence REAL NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        completed_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS notification_outbox (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        application_id TEXT,
-        candidate_id TEXT,
-        job_id TEXT NOT NULL,
-        notification_type TEXT NOT NULL,
-        recipient TEXT NOT NULL,
-        subject TEXT NOT NULL DEFAULT '',
-        body TEXT NOT NULL DEFAULT '',
-        status TEXT NOT NULL DEFAULT 'pending',
-        attempts INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        sent_at TEXT,
-        last_error TEXT,
-        UNIQUE(application_id, notification_type, recipient)
-    );
-    CREATE INDEX IF NOT EXISTS idx_outbox_status ON notification_outbox(status);
-    CREATE TABLE IF NOT EXISTS interview_invites (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        candidate_id TEXT NOT NULL,
-        job_id TEXT NOT NULL DEFAULT '',
-        application_id TEXT,
-        token TEXT NOT NULL UNIQUE,
-        status TEXT NOT NULL DEFAULT 'active',
-        created_at TEXT NOT NULL,
-        expires_at TEXT NOT NULL,
-        consumed_at TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_invites_candidate ON interview_invites(candidate_id);
-    CREATE TABLE IF NOT EXISTS application_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        application_id TEXT NOT NULL,
-        event TEXT NOT NULL,
-        detail TEXT NOT NULL DEFAULT '',
-        created_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_app_events_application ON application_events(application_id);
-    """)
+    """Initialize the database using the new abstraction layer."""
+    _init_db()
+    # Run additional migrations using the engine's cached connection
+    # to avoid SQLite locking issues with multiple connections
+    engine = get_database_engine()
+    if engine.is_postgresql:
+        # For PostgreSQL, use a new connection from the pool
+        conn = engine._get_pg_connection()
+        try:
+            _migrate_candidates_resume_columns(conn)
+            _migrate_job_postings_active_column(conn)
+            _migrate_email_intake_columns(conn)
+            _migrate_screening_columns(conn)
+            _migrate_candidates_application_link(conn)
+            _migrate_screening_results_threshold(conn)
+            _migrate_application_events(conn)
+            _migrate_job_postings_empty_ids(conn)
+            _migrate_candidates_unique_email_job(conn)
+            _migrate_score_tables_unique(conn)
+            _migrate_linkedin_job_columns(conn)
+            _migrate_linkedin_tables(conn)
+            _migrate_question_transcripts(conn)
+            _migrate_session_questions(conn)
+            _migrate_live_state(conn)
+            _migrate_routing_fields(conn)
+            conn.commit()
+        finally:
+            engine._return_pg_connection(conn)
+    else:
+        # For SQLite, use the cached connection that was used for initial schema creation
+        conn = engine._get_sqlite_connection()
+        try:
+            _migrate_candidates_resume_columns(conn)
+            _migrate_job_postings_active_column(conn)
+            _migrate_email_intake_columns(conn)
+            _migrate_screening_columns(conn)
+            _migrate_candidates_application_link(conn)
+            _migrate_screening_results_threshold(conn)
+            _migrate_application_events(conn)
+            _migrate_job_postings_empty_ids(conn)
+            _migrate_candidates_unique_email_job(conn)
+            _migrate_score_tables_unique(conn)
+            _migrate_linkedin_job_columns(conn)
+            _migrate_linkedin_tables(conn)
+            _migrate_question_transcripts(conn)
+            _migrate_session_questions(conn)
+            _migrate_live_state(conn)
+            _migrate_routing_fields(conn)
+            conn.commit()
+        finally:
+            # Don't close the cached connection - it's reused for regular operations
+            pass
+
+
+def _migrate_question_transcripts(conn):
+    """Per-question transcript storage for STT integration (Phase 2A).
+
+    sessions.transcript is a single TEXT column that would overwrite across
+    questions.  This table stores one row per (session_id, question_id) so
+    each answer's transcript is preserved independently.
+    """
     conn.execute(
-        """INSERT OR IGNORE INTO candidate_accounts
-        (candidate_id, password_hash, full_name)
-        VALUES (?, ?, ?)""",
-        ("candidate01", f"interviewiq${_hash_password('interview123', 'interviewiq')}", "Demo Candidate"),
+        """CREATE TABLE IF NOT EXISTS question_transcripts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        question_id TEXT NOT NULL,
+        transcript TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        UNIQUE(session_id, question_id)
+    )"""
     )
-    conn.commit()
-    conn.close()
-    _migrate_candidates_resume_columns()
-    _migrate_job_postings_active_column()
-    _migrate_email_intake_columns()
-    _migrate_screening_columns()
-    _migrate_candidates_application_link()
-    _migrate_screening_results_threshold()
-    _migrate_application_events()
-    _migrate_job_postings_empty_ids()
-    _migrate_candidates_unique_email_job()
-    _migrate_score_tables_unique()
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_qtranscripts_session "
+        "ON question_transcripts(session_id)"
+    )
 
 
-def _migrate_candidates_unique_email_job():
+def _migrate_session_questions(conn):
+    """Locked question set per interview session (Phase 2B).
+
+    Each row is one question in the session's immutable question set.
+    Once generated/selected and persisted, the candidate receives exactly
+    these questions in question_index order — no regeneration on refresh.
+    """
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS session_questions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        question_index INTEGER NOT NULL,
+        question_id TEXT NOT NULL,
+        question_text TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT '',
+        competency TEXT NOT NULL DEFAULT '',
+        difficulty TEXT NOT NULL DEFAULT 'medium',
+        source TEXT NOT NULL DEFAULT 'bank',
+        created_at TEXT NOT NULL,
+        UNIQUE(session_id, question_index),
+        UNIQUE(session_id, question_id)
+    )"""
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sq_session "
+        "ON session_questions(session_id)"
+    )
+
+
+def _migrate_live_state(conn):
+    """Phase 3A: live-interview state on the existing session tables.
+
+    Minimal additive schema — no redundant interview table. Adds:
+      * session_questions.asked        — whether that question has been asked
+      * sessions.live_question_id      — the currently-active question ('' = none)
+    Reuses sessions.status ('live') for the in-progress live state.
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(session_questions)").fetchall()}
+    if "asked" not in cols:
+        conn.execute("ALTER TABLE session_questions ADD COLUMN asked INTEGER NOT NULL DEFAULT 0")
+    s_cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    if "live_question_id" not in s_cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN live_question_id TEXT NOT NULL DEFAULT ''")
+
+
+def _migrate_routing_fields(conn):
+    """Interview-routing/cohort fields for the hybrid mode-allocation workflow.
+
+    Job-scope strategy (the recruiter confirms one strategy per cohort):
+      * interview_strategy   — AUTO | MODE_1_ONLY | MODE_2_THEN_MODE_1
+      * recommended_strategy — the computed recommendation (AUTO only)
+      * strategy_confirmed   — 0 until the recruiter explicitly confirms
+      * strategy_confirmed_at
+      * cohort_finalized_at  — set once the job's screening cohort is final
+
+    Candidate-scope progression (kept on candidates to avoid a redundant row):
+      * interview_mode   — MODE_1 | MODE_2 ('' until assigned)
+      * mode_status      — the mode progression state machine
+      * mode2_score      — aggregated Mode 2 overall score (for ranking)
+      * overall_score    — same numeric value, kept for ranking/compare
+      * rank             — within-job rank (1 is best)
+      * ranked_at / promoted_at
+      * mode_assignment_source — SYSTEM | RECRUITER
+    """
+
+    jcols = {row["name"] for row in conn.execute("PRAGMA table_info(job_postings)").fetchall()}
+    for col, col_type, default in [
+        ("interview_strategy", "TEXT", "'AUTO'"),
+        ("recommended_strategy", "TEXT", "''"),
+        ("strategy_confirmed", "INTEGER", "0"),
+        ("strategy_confirmed_at", "TEXT", "''"),
+        ("cohort_finalized_at", "TEXT", "''"),
+    ]:
+        if col not in jcols:
+            conn.execute(f"ALTER TABLE job_postings ADD COLUMN {col} {col_type} NOT NULL DEFAULT {default}")
+
+    ccols = {row["name"] for row in conn.execute("PRAGMA table_info(candidates)").fetchall()}
+    for col, col_type in [
+        ("interview_mode", "TEXT"),
+        ("mode_status", "TEXT"),
+        ("mode2_score", "REAL"),
+        ("overall_score", "REAL"),
+        ("rank", "INTEGER"),
+        ("ranked_at", "TEXT"),
+        ("promoted_at", "TEXT"),
+        ("mode_assignment_source", "TEXT"),
+    ]:
+        if col not in ccols:
+            conn.execute(f"ALTER TABLE candidates ADD COLUMN {col} {col_type}")
+
+
+def _migrate_candidates_unique_email_job(conn):
     """Enforce one candidate per (email, job_id).
 
     A race between the background screening worker and the email-intake's
@@ -268,22 +219,18 @@ def _migrate_candidates_unique_email_job():
     applicant. Dedupes any rows that already slipped in (keeps the earliest),
     then adds a unique index so the race can never recur.
     """
-    conn = get_connection()
     conn.execute(
         """DELETE FROM candidates WHERE rowid NOT IN (
             SELECT MIN(rowid) FROM candidates GROUP BY email, job_id
         )"""
     )
-    conn.commit()
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_email_job "
         "ON candidates(email, job_id)"
     )
-    conn.commit()
-    conn.close()
 
 
-def _migrate_score_tables_unique():
+def _migrate_score_tables_unique(conn):
     """Enforce one score/explanation/fairness row per (session_id, question_id).
 
     A double-submit — the candidate's /submit-answer racing a recruiter's
@@ -293,7 +240,6 @@ def _migrate_score_tables_unique():
     are switched to UPSERT (INSERT ... ON CONFLICT DO UPDATE), so re-scoring
     the same question overwrites rather than duplicates.
     """
-    conn = get_connection()
     for table in ("competency_scores", "explanations", "fairness_flags"):
         conn.execute(
             f"DELETE FROM {table} WHERE id NOT IN ("
@@ -303,8 +249,64 @@ def _migrate_score_tables_unique():
             f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table.rstrip('s')}_session_question "
             f"ON {table}(session_id, question_id)"
         )
-    conn.commit()
-    conn.close()
+
+
+def _migrate_linkedin_job_columns(conn):
+    """Adds the DB-authoritative LinkedIn publication columns to job_postings.
+
+    A job is never published twice: the status column is the single source of
+    truth, mutated only through row-locked transitions (see
+    try_claim_linkedin_publish). Columns are added idempotently per the
+    standard in-project migration pattern.
+    """
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(job_postings)").fetchall()}
+    if "linkedin_post_status" not in cols:
+        conn.execute(
+            "ALTER TABLE job_postings ADD COLUMN "
+            "linkedin_post_status TEXT NOT NULL DEFAULT 'NOT_POSTED'"
+        )
+    for col in (
+        "linkedin_post_id",
+        "linkedin_post_url",
+        "linkedin_posted_at",
+        "linkedin_author_urn",
+        "linkedin_last_error",
+        "linkedin_claim_started_at",
+    ):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE job_postings ADD COLUMN {col} TEXT")
+
+
+def _migrate_linkedin_tables(conn):
+    """Adds per-recruiter LinkedIn OAuth connection + one-time OAuth state tables.
+
+    Unlike the machine-wide Gmail/Calendar settings.json tokens, LinkedIn is
+    stored per recruiter so Recruiter A can never see or reuse Recruiter B's
+    connection. OAuth state rows are single-use, TTL-bounded CSRF protection.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS linkedin_connections (
+            recruiter_username TEXT PRIMARY KEY,
+            linkedin_member_id TEXT NOT NULL,
+            member_name TEXT NOT NULL DEFAULT '',
+            member_email TEXT NOT NULL DEFAULT '',
+            access_token TEXT NOT NULL,
+            refresh_token TEXT NOT NULL DEFAULT '',
+            token_expires_at TEXT NOT NULL DEFAULT '',
+            scope TEXT NOT NULL DEFAULT '',
+            connected_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS linkedin_oauth_states (
+            state TEXT PRIMARY KEY,
+            recruiter_username TEXT NOT NULL,
+            redirect_uri TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            used_at TEXT
+        );
+        """
+    )
 
 
 def generate_job_id() -> str:
@@ -314,11 +316,10 @@ def generate_job_id() -> str:
     return uuid.uuid4().hex
 
 
-def _migrate_job_postings_empty_ids():
+def _migrate_job_postings_empty_ids(conn):
     """Repair rows created when the backend trusted a client-supplied (blank)
     job_id. Assigns a fresh server-generated id and propagates it to every
     table that references job_postings.job_id so linked data survives."""
-    conn = get_connection()
     tables = {r["name"] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table'"
     ).fetchall()}
@@ -335,17 +336,14 @@ def _migrate_job_postings_empty_ids():
         ):
             if table in tables:
                 conn.execute(f"UPDATE {table} SET job_id = ? WHERE job_id = ?", (new_id, old_id))
-    conn.commit()
-    conn.close()
 
 
-def _migrate_screening_columns():
+def _migrate_screening_columns(conn):
     """Adds the application-first screening config to an existing
     job_postings table (screening_enabled, auto_invite_enabled,
     minimum_experience_years, required_education, screening_weights,
     created_by).
     """
-    conn = get_connection()
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(job_postings)").fetchall()}
     if "created_by" not in cols:
         conn.execute("ALTER TABLE job_postings ADD COLUMN created_by TEXT NOT NULL DEFAULT 'recruiter'")
@@ -360,24 +358,18 @@ def _migrate_screening_columns():
     if "minimum_experience_years" not in cols:
         # nullable on purpose (SQLite cannot add a NOT NULL column with a NULL default)
         conn.execute("ALTER TABLE job_postings ADD COLUMN minimum_experience_years REAL")
-    conn.commit()
-    conn.close()
 
 
-def _migrate_screening_results_threshold():
+def _migrate_screening_results_threshold(conn):
     """Adds the auditable threshold_used column to screening_results so the
     threshold applied to a decision is persisted at screening time."""
-    conn = get_connection()
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(screening_results)").fetchall()}
     if "threshold_used" not in cols:
         conn.execute("ALTER TABLE screening_results ADD COLUMN threshold_used REAL")
-    conn.commit()
-    conn.close()
 
 
-def _migrate_application_events():
+def _migrate_application_events(conn):
     """Ensures the application_events audit-trail table exists on upgraded DBs."""
-    conn = get_connection()
     conn.execute(
         """CREATE TABLE IF NOT EXISTS application_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -390,18 +382,13 @@ def _migrate_application_events():
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_app_events_application ON application_events(application_id)"
     )
-    conn.commit()
-    conn.close()
 
 
-def _migrate_candidates_application_link():
+def _migrate_candidates_application_link(conn):
     """Adds application_id to candidates for the application->candidate link."""
-    conn = get_connection()
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(candidates)").fetchall()}
     if "application_id" not in cols:
         conn.execute("ALTER TABLE candidates ADD COLUMN application_id TEXT")
-    conn.commit()
-    conn.close()
 
 
 def _hash_password(password: str, salt: str) -> str:
@@ -410,25 +397,21 @@ def _hash_password(password: str, salt: str) -> str:
     return hashlib.sha256((salt + password).encode()).hexdigest()
 
 
-def _migrate_job_postings_active_column():
+def _migrate_job_postings_active_column(conn):
     """Adds the is_active flag to an existing job_postings table from before
     the candidate-facing active-postings view existed. Covers upgrades from
     an older DB file, same as _migrate_candidates_resume_columns().
     """
-    conn = get_connection()
     existing = {row["name"] for row in conn.execute("PRAGMA table_info(job_postings)").fetchall()}
     if "is_active" not in existing:
         conn.execute("ALTER TABLE job_postings ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
-    conn.commit()
-    conn.close()
 
 
-def _migrate_candidates_resume_columns():
+def _migrate_candidates_resume_columns(conn):
     """Adds resume columns to an existing candidates table from before this
     feature existed. CREATE TABLE IF NOT EXISTS alone won't add columns to
     an already-created table, so this covers upgrades from an older DB file.
     """
-    conn = get_connection()
     existing = {row["name"] for row in conn.execute("PRAGMA table_info(candidates)").fetchall()}
     new_columns = {
         "resume_path": "TEXT",
@@ -441,16 +424,13 @@ def _migrate_candidates_resume_columns():
     for col, col_type in new_columns.items():
         if col not in existing:
             conn.execute(f"ALTER TABLE candidates ADD COLUMN {col} {col_type}")
-    conn.commit()
-    conn.close()
 
 
-def _migrate_email_intake_columns():
+def _migrate_email_intake_columns(conn):
     """Adds source, screening_status, invite_email_sent to candidates and
     screening_threshold, application_gmail_label to job_postings for the
     email-to-invite pipeline feature.
     """
-    conn = get_connection()
     cand_cols = {row["name"] for row in conn.execute("PRAGMA table_info(candidates)").fetchall()}
     for col, col_type, default in [
         ("source", "TEXT", "'manual'"),
@@ -466,8 +446,6 @@ def _migrate_email_intake_columns():
     ]:
         if col not in job_cols:
             conn.execute(f"ALTER TABLE job_postings ADD COLUMN {col} {col_type} NOT NULL DEFAULT {default}")
-    conn.commit()
-    conn.close()
 
 
 # --- writes (called by whoever produces that data type) ---
@@ -553,10 +531,14 @@ def save_candidate(candidate):
             """INSERT INTO candidates
             (candidate_id, job_id, name, email, invite_code, status, session_id, invited_at,
              resume_path, resume_skills, experience_years, match_score, matched_skills, missing_skills,
-             source, screening_status, invite_email_sent, application_id)
+             source, screening_status, invite_email_sent, application_id,
+             interview_mode, mode_status, mode2_score, overall_score, rank, ranked_at, promoted_at,
+             mode_assignment_source)
             VALUES (:candidate_id, :job_id, :name, :email, :invite_code, :status, :session_id, :invited_at,
                     :resume_path, :resume_skills, :experience_years, :match_score, :matched_skills, :missing_skills,
-                    :source, :screening_status, :invite_email_sent, :application_id)
+                    :source, :screening_status, :invite_email_sent, :application_id,
+                    :interview_mode, :mode_status, :mode2_score, :overall_score, :rank, :ranked_at, :promoted_at,
+                    :mode_assignment_source)
             ON CONFLICT(candidate_id) DO UPDATE SET
                 job_id = excluded.job_id,
                 name = excluded.name,
@@ -574,7 +556,15 @@ def save_candidate(candidate):
                 source = excluded.source,
                 screening_status = excluded.screening_status,
                 invite_email_sent = excluded.invite_email_sent,
-                application_id = excluded.application_id""",
+                application_id = excluded.application_id,
+                interview_mode = excluded.interview_mode,
+                mode_status = excluded.mode_status,
+                mode2_score = excluded.mode2_score,
+                overall_score = excluded.overall_score,
+                rank = excluded.rank,
+                ranked_at = excluded.ranked_at,
+                promoted_at = excluded.promoted_at,
+                mode_assignment_source = excluded.mode_assignment_source""",
             {
                 **d,
                 "invited_at": str(d["invited_at"]),
@@ -622,6 +612,16 @@ def update_candidate_status(candidate_id, status, session_id=None):
             "UPDATE candidates SET status = ? WHERE candidate_id = ?",
             (status, candidate_id),
         )
+    conn.commit()
+    conn.close()
+
+
+def update_candidate_screening_status(candidate_id, screening_status):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE candidates SET screening_status = ? WHERE candidate_id = ?",
+        (screening_status, candidate_id),
+    )
     conn.commit()
     conn.close()
 
@@ -705,6 +705,28 @@ def get_all_candidates():
 
 
 def save_job_posting(job):
+    # INSERT OR REPLACE drops any column not in the SQL, so a job edit (PUT)
+    # would otherwise wipe DB-authoritative LinkedIn publish state. Preserve it
+    # from the existing row — REPLACE is only used here for upsert semantics.
+    existing = get_job_posting(job.job_id) or {}
+    linkedin_state = {
+        "linkedin_post_status": existing.get("linkedin_post_status", "NOT_POSTED"),
+        "linkedin_post_id": existing.get("linkedin_post_id"),
+        "linkedin_post_url": existing.get("linkedin_post_url"),
+        "linkedin_posted_at": existing.get("linkedin_posted_at"),
+        "linkedin_author_urn": existing.get("linkedin_author_urn"),
+        "linkedin_last_error": existing.get("linkedin_last_error"),
+        "linkedin_claim_started_at": existing.get("linkedin_claim_started_at"),
+    }
+    # Routing/cohort state is DB-authoritative once confirmed — never clobber it
+    # via a PUT/INSERT OR REPLACE. Only the dedicated confirm endpoint flips it.
+    routing_state = {
+        "interview_strategy": existing.get("interview_strategy", "AUTO"),
+        "recommended_strategy": existing.get("recommended_strategy", ""),
+        "strategy_confirmed": existing.get("strategy_confirmed", 0),
+        "strategy_confirmed_at": existing.get("strategy_confirmed_at", ""),
+        "cohort_finalized_at": existing.get("cohort_finalized_at", ""),
+    }
     conn = get_connection()
     d = asdict(job)
     conn.execute(
@@ -713,12 +735,22 @@ def save_job_posting(job):
          num_rounds, time_limit_seconds, adaptive_difficulty, competency_weights, created_at,
          screening_threshold, application_gmail_label,
          screening_enabled, auto_invite_enabled, minimum_experience_years, required_education,
-         screening_weights, created_by)
+         screening_weights, created_by,
+         linkedin_post_status, linkedin_post_id, linkedin_post_url,
+         linkedin_posted_at, linkedin_author_urn, linkedin_last_error,
+         linkedin_claim_started_at,
+         interview_strategy, recommended_strategy, strategy_confirmed,
+         strategy_confirmed_at, cohort_finalized_at)
         VALUES (:job_id, :title, :description, :required_skills, :experience_level, :department,
                 :num_rounds, :time_limit_seconds, :adaptive_difficulty, :competency_weights, :created_at,
                 :screening_threshold, :application_gmail_label,
                 :screening_enabled, :auto_invite_enabled, :minimum_experience_years, :required_education,
-                :screening_weights, :created_by)""",
+                :screening_weights, :created_by,
+                :linkedin_post_status, :linkedin_post_id, :linkedin_post_url,
+                :linkedin_posted_at, :linkedin_author_urn, :linkedin_last_error,
+                :linkedin_claim_started_at,
+                :interview_strategy, :recommended_strategy, :strategy_confirmed,
+                :strategy_confirmed_at, :cohort_finalized_at)""",
         {
             **d,
             "required_skills": json.dumps(d["required_skills"]),
@@ -728,6 +760,8 @@ def save_job_posting(job):
             "screening_enabled": int(d["screening_enabled"]),
             "auto_invite_enabled": int(d["auto_invite_enabled"]),
             "screening_weights": json.dumps(d["screening_weights"]),
+            **linkedin_state,
+            **routing_state,
         },
     )
     conn.commit()
@@ -740,9 +774,9 @@ def save_session(session):
     conn.execute(
         """INSERT OR REPLACE INTO sessions
         (session_id, candidate_name, job_title, job_id, video_path, audio_path,
-         transcript, started_at, completed_at, status)
+         transcript, started_at, completed_at, status, live_question_id)
         VALUES (:session_id, :candidate_name, :job_title, :job_id, :video_path, :audio_path,
-                :transcript, :started_at, :completed_at, :status)""",
+                :transcript, :started_at, :completed_at, :status, :live_question_id)""",
         {**d, "started_at": str(d["started_at"]), "completed_at": str(d["completed_at"])},
     )
     conn.commit()
@@ -751,7 +785,7 @@ def save_session(session):
 
 def update_session(session_id, **fields):
     """Partial update of an existing session row (e.g. transcript as it streams)."""
-    allowed = {"transcript", "status", "completed_at", "video_path", "audio_path"}
+    allowed = {"transcript", "status", "completed_at", "video_path", "audio_path", "live_question_id"}
     changes = {key: value for key, value in fields.items() if key in allowed}
     if not changes:
         return
@@ -761,6 +795,82 @@ def update_session(session_id, **fields):
     conn.execute(f"UPDATE sessions SET {assignments} WHERE session_id = ?", values)
     conn.commit()
     conn.close()
+
+
+class SessionResolutionError(Exception):
+    """Raised by resolve_or_create_session when a session cannot be created or
+    resolved for the requested candidate (missing candidate, job mismatch, or a
+    pre-existing session bound to a different job child)."""
+
+
+def resolve_or_create_session(candidate_id, job_id, candidate_name, job_title):
+    """Return the single authoritative session_id for a candidate interview.
+
+    The session id is derived server-side and never trusted from the client, so
+    the recruiter and the candidate always converge on the SAME session (the one
+    stored in candidates.session_id). Idempotent and race-safe: concurrent calls
+    for the same candidate cannot produce two sessions because the read-check +
+    insert + link happen inside one BEGIN IMMEDIATE write transaction.
+
+    Raises SessionResolutionError on candidate-not-found or candidate/job
+    mismatch. Returns the authoritative session_id otherwise.
+    """
+    candidate = get_candidate(candidate_id)
+    if not candidate:
+        raise SessionResolutionError("candidate not found")
+    if candidate.get("job_id") != job_id:
+        raise SessionResolutionError("candidate/job mismatch")
+
+    existing = candidate.get("session_id")
+    if existing:
+        # If the stored link points at a real session, it is the authoritative
+        # session regardless of anything the client claimed. Job context has
+        # already been verified against candidate.job_id above. A dangling link
+        # (session_id set but no sessions row — e.g. legacy seeded data) is
+        # treated as empty and repaired below.
+        if get_session(existing):
+            return existing
+
+    sid = str(uuid.uuid4())
+    now = str(datetime.now().isoformat())
+    conn = get_connection()
+    try:
+        # Serialize writers; re-read the candidate's link under the lock so two
+        # near-simultaneous starts can never both create a fresh session. Only
+        # reuse a stored id that actually points at an existing session row.
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT session_id FROM candidates WHERE candidate_id = ?", (candidate_id,)
+        ).fetchone()
+        if row and row["session_id"] and get_session(row["session_id"]):
+            conn.execute("COMMIT")
+            return row["session_id"]
+        conn.execute(
+            """INSERT OR REPLACE INTO sessions
+            (session_id, candidate_name, job_title, job_id, video_path, audio_path,
+             transcript, started_at, completed_at, status)
+            VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, NULL, 'in_progress')""",
+            (sid, candidate_name, job_title, job_id, now),
+        )
+        conn.execute(
+            "UPDATE candidates SET session_id = ? WHERE candidate_id = ?",
+            (sid, candidate_id),
+        )
+        conn.execute("COMMIT")
+        return sid
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_session_for_candidate(candidate_id):
+    """Resolve candidate_id -> candidates.session_id -> sessions row, or None."""
+    candidate = get_candidate(candidate_id)
+    if not candidate or not candidate.get("session_id"):
+        return None
+    return get_session(candidate["session_id"])
 
 
 def start_live_interview(session_id, candidate_id, candidate_name, question, question_index=0):
@@ -868,6 +978,141 @@ def save_fairness_flag(flag):
     )
     conn.commit()
     conn.close()
+
+
+# --- question transcripts (per-answer STT storage, Phase 2A) ---
+
+def save_question_transcript(session_id: str, question_id: str, transcript: str):
+    """Upsert one question's transcript. Idempotent: re-transcribing the same
+    question overwrites rather than duplicates."""
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO question_transcripts (session_id, question_id, transcript, created_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(session_id, question_id) DO UPDATE SET
+            transcript = excluded.transcript,
+            created_at = excluded.created_at""",
+        (session_id, question_id, transcript, str(datetime.utcnow())),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_question_transcript(session_id: str, question_id: str):
+    """Return the transcript dict for one question, or None."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM question_transcripts WHERE session_id = ? AND question_id = ?",
+        (session_id, question_id),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_question_transcripts(session_id: str):
+    """Return all transcripts for a session, ordered by question_id."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM question_transcripts WHERE session_id = ? ORDER BY question_id",
+        (session_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# --- session questions (per-session locked question set, Phase 2B) ---
+
+def save_session_questions(session_id: str, questions: list[dict]):
+    """Persist a locked question set for a session. Replaces any existing set.
+
+    Each question dict must contain: question_index, question_id,
+    question_text, category, competency, difficulty, source.
+    """
+    conn = get_connection()
+    conn.execute("DELETE FROM session_questions WHERE session_id = ?", (session_id,))
+    now = str(datetime.utcnow())
+    for q in questions:
+        conn.execute(
+            """INSERT INTO session_questions
+            (session_id, question_index, question_id, question_text,
+             category, competency, difficulty, source, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                session_id,
+                q["question_index"],
+                q["question_id"],
+                q["question_text"],
+                q.get("category", ""),
+                q.get("competency", ""),
+                q.get("difficulty", "medium"),
+                q.get("source", "bank"),
+                now,
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_session_questions(session_id: str) -> list[dict]:
+    """Return the locked question set for a session, ordered by question_index."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM session_questions WHERE session_id = ? ORDER BY question_index",
+        (session_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def session_questions_exist(session_id: str) -> bool:
+    """Check whether a session already has a locked question set."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT 1 FROM session_questions WHERE session_id = ? LIMIT 1",
+        (session_id,),
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def get_session_question_by_id(session_id: str, question_id: str):
+    """Return a single locked question by id, or None if it doesn't belong to
+    this session. Used by the live interviewer to validate the question the
+    recruiter asks actually belongs to the session's locked set."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM session_questions WHERE session_id = ? AND question_id = ?",
+        (session_id, question_id),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def mark_question_asked(session_id: str, question_id: str):
+    """Mark a session question as asked (idempotent)."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE session_questions SET asked = 1 WHERE session_id = ? AND question_id = ?",
+        (session_id, question_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_live_question(session_id: str, question_id: str):
+    """Persist the currently-active question for the live session ('' = none)."""
+    update_session(session_id, live_question_id=question_id)
+
+
+def get_live_question(session_id: str):
+    """Return the currently-active question row for a live session, or None."""
+    row = get_session(session_id)
+    if not row:
+        return None
+    question_id = row.get("live_question_id", "")
+    if not question_id:
+        return None
+    return get_session_question_by_id(session_id, question_id)
 
 
 # --- reads (called by app/reports/ for dashboard + report pages) ---
@@ -1545,6 +1790,18 @@ def get_screening_result(application_id):
     return _decode_screening_result_row(dict(row)) if row else None
 
 
+MANUAL_SCREENING_APPLICATION_PREFIX = "manual:"
+
+
+def get_candidate_screening_result(candidate_id):
+    """Canonical ScreeningResult for a candidate with no application row
+    (manual resume upload). Stored under '{prefix}{candidate_id}' in the same
+    screening_results table, so one authoritative result exists per candidate
+    regardless of ingestion path.
+    """
+    return get_screening_result(f"{MANUAL_SCREENING_APPLICATION_PREFIX}{candidate_id}")
+
+
 def get_screening_results_for_job(job_id):
     """All screening results for a job's applications, joined for the dashboard."""
     conn = get_connection()
@@ -1559,6 +1816,256 @@ def get_screening_results_for_job(job_id):
     ).fetchall()
     conn.close()
     return [_decode_screening_result_row(dict(r)) for r in rows]
+
+
+# --- interview routing / cohort helpers (hybrid mode-allocation) ---
+
+VALID_INTERVIEW_STRATEGIES = ("AUTO", "MODE_1_ONLY", "MODE_2_THEN_MODE_1")
+VALID_INTERVIEW_MODES = ("MODE_1", "MODE_2")
+# Candidate interview-mode progression states.
+MODE_STATUS_SHORTLISTED = "SHORTLISTED"          # cohort pending strategy confirm
+MODE_STATUS_CONFIRMED = "CONFIRMED"              # strategy confirmed, mode assigned
+MODE_STATUS_INVITED = "INVITED"                  # mode invite enqueued
+MODE_STATUS_COMPLETED = "COMPLETED"              # their interview is done
+MODE_STATUS_PROMOTED = "PROMOTED"                # Mode 2 → Mode 1 promotion applied
+MODE_STATUS_NOT_PROMOTED = "NOT_PROMOTED"        # Mode 2 cohort done, not selected for Mode 1
+
+
+def get_job_cohort_status(job_id):
+    """Screening-cohort state for one job: finalized-flag, shortlist count,
+    recommended strategy (AUTO), confirmed strategy, invitation progress.
+    """
+    job = get_job_posting(job_id)
+    if job is None:
+        return None
+    conn = get_connection()
+    row = conn.execute(
+        """SELECT
+            SUM(CASE WHEN ap.status IN ('invite_pending','invited','in_progress','completed') THEN 1 ELSE 0 END) AS shortlisted,
+            SUM(CASE WHEN ap.screening_status IN ('queued','processing') THEN 1 ELSE 0 END) AS screening_pending
+        FROM applications ap WHERE ap.job_id = ?""",
+        (job_id,),
+    ).fetchone()
+    conn.close()
+    return {
+        "job_id": job_id,
+        "cohort_finalized": bool(job.get("cohort_finalized_at")),
+        "cohort_finalized_at": job.get("cohort_finalized_at"),
+        "screening_pending": row["screening_pending"] or 0,
+        "shortlisted": row["shortlisted"] or 0,
+        "interview_strategy": job.get("interview_strategy", "AUTO"),
+        "recommended_strategy": job.get("recommended_strategy", ""),
+        "strategy_confirmed": bool(job.get("strategy_confirmed")),
+        "strategy_confirmed_at": job.get("strategy_confirmed_at"),
+    }
+
+
+def set_job_cohort_finalized(job_id, finalized_at):
+    """Mark a job's screening cohort as final (idempotent)."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE job_postings SET cohort_finalized_at = ? WHERE job_id = ? AND cohort_finalized_at = ''",
+        (finalized_at, job_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_job_strategy(job_id, strategy, strategy_confirmed=False, confirmed_at="",
+                     recommended_strategy="", is_auto_recommendation=False):
+    """Set the recruiter's interview strategy on a job. For AUTO the caller may
+    persist a fresh recommendation; a manual strategy always clears it.
+    Confirmation is idempotent (won't un-confirm if already confirmed)."""
+    if strategy not in VALID_INTERVIEW_STRATEGIES:
+        raise ValueError(f"Unknown interview strategy: {strategy!r}")
+    confirmed = 1 if strategy_confirmed else 0
+    conn = get_connection()
+    conn.execute(
+        """UPDATE job_postings
+        SET interview_strategy = ?, recommended_strategy = ?,
+            strategy_confirmed = ?,
+            strategy_confirmed_at = CASE WHEN ? != '' AND strategy_confirmed = 0
+                THEN ? ELSE strategy_confirmed_at END
+        WHERE job_id = ?""",
+        (
+            strategy,
+            recommended_strategy if is_auto_recommendation else "",
+            confirmed,
+            confirmed_at,
+            confirmed_at,
+            job_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def confirm_job_strategy(job_id, strategy, confirmed_at):
+    """Persist the recruiter-confirmed strategy (separate from the PUT-on-job
+    flow so a plain job edit can never silently re-confirm or overwrite it)."""
+    if strategy not in VALID_INTERVIEW_STRATEGIES:
+        raise ValueError(f"Unknown interview strategy: {strategy!r}")
+    conn = get_connection()
+    conn.execute(
+        """UPDATE job_postings
+        SET interview_strategy = ?, strategy_confirmed = 1, strategy_confirmed_at = ?
+        WHERE job_id = ?""",
+        (strategy, confirmed_at, job_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_strategy_recommendation(shortlist_count, capacity):
+    """The AUTO recommendation a recruiter would be shown before confirming.
+    Threshold: shortlisted <= capacity → everyone to a live Mode-1 interview.
+    Otherwise → Mode-2 for the whole cohort, top-N (capacity) promoted to Mode 1."""
+    return "MODE_1_ONLY" if shortlist_count <= capacity else "MODE_2_THEN_MODE_1"
+
+
+def get_shortlisted_candidates(job_id):
+    """Candidates eligible for interview-mode allocation (passed screening)."""
+    return get_candidates_for_job(job_id)
+
+
+def count_shortlisted_for_job(job_id):
+    """Number of shortlisted (eligible) candidates for one job — the driver of
+    the AUTO strategy recommendation."""
+    return len(get_candidates_for_job(job_id))
+
+
+def get_candidate_by_session(session_id):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM candidates WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    conn.close()
+    return _decode_candidate_row(dict(row)) if row else None
+
+
+def set_candidate_route(candidate_id, interview_mode, mode_status, source="SYSTEM"):
+    """Assign (or reassign) a candidate's interview mode + progression state."""
+    if interview_mode not in {None, ""}.union(VALID_INTERVIEW_MODES):
+        raise ValueError(f"Unknown interview mode: {interview_mode!r}")
+    conn = get_connection()
+    conn.execute(
+        """UPDATE candidates
+        SET interview_mode = ?, mode_status = ?, mode_assignment_source = ?
+        WHERE candidate_id = ?""",
+        (interview_mode or "", mode_status, source, candidate_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_candidate_mode2_result(candidate_id, mode2_score, overall_score):
+    """Persist a candidate's Mode 2 aggregate score (computed from their
+    completed session) ahead of cohort ranking."""
+    conn = get_connection()
+    conn.execute(
+        """UPDATE candidates
+        SET mode2_score = ?, overall_score = ?, ranked_at = ?
+        WHERE candidate_id = ?""",
+        (mode2_score, overall_score, str(_utcnow()), candidate_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_mode2_candidates_for_job(job_id):
+    """Candidates routed to Mode 2 for a job (cohort members), invited order."""
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT c.*, s.status AS session_status, s.completed_at AS session_completed_at
+        FROM candidates c
+        LEFT JOIN sessions s ON c.session_id = s.session_id
+        LEFT JOIN screening_results r ON c.application_id = r.application_id
+        WHERE c.job_id = ?
+          AND c.interview_mode = 'MODE_2'
+          AND (c.application_id IS NULL OR r.decision = 'passed')
+        ORDER BY c.invited_at ASC, c.candidate_id ASC""",
+        (job_id,),
+    ).fetchall()
+    conn.close()
+    return [_decode_candidate_row(dict(r)) for r in rows]
+
+
+def apply_cohort_ranking(job_id, ranked, promoted, not_promoted, at):
+    """Persist a Mode 2 cohort ranking in one transaction:
+      * ranked       — [(candidate_id, rank_index)] every cohort member
+      * promoted     — [candidate_id] of the top-N who advance to Mode 1
+      * not_promoted — [candidate_id] who stay ranked but do not advance
+    Idempotent by construction: routing never calls this twice with changed
+    data because ranking runs exactly once per cohort (guarded upstream).
+    """
+    promoted_set = set(promoted)
+    conn = get_connection()
+    for candidate_id, rank_index in ranked:
+        is_promoted = candidate_id in promoted_set
+        conn.execute(
+            """UPDATE candidates SET rank = ?, promoted_at = ?,
+               mode_status = ?, interview_mode = ?
+            WHERE candidate_id = ?""",
+            (
+                rank_index,
+                at if is_promoted else None,
+                "PROMOTED" if is_promoted else "NOT_PROMOTED",
+                "MODE_1" if is_promoted else "MODE_2",
+                candidate_id,
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+
+def set_job_recommended_strategy(job_id, recommended_strategy):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE job_postings SET recommended_strategy = ? WHERE job_id = ?",
+        (recommended_strategy, job_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_pending_mode_assignments():
+    """Candidates whose screening cohort is finalized & confirmed but who have
+    not yet been routed to a Mode (used by the worker to pick up AUTO jobs)."""
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT c.* FROM candidates c
+        JOIN job_postings j ON c.job_id = j.job_id
+        WHERE j.cohort_finalized_at != ''
+          AND j.strategy_confirmed = 1
+          AND c.interview_mode = ''
+          AND c.mode_status = 'SHORTLISTED'""",
+    ).fetchall()
+    conn.close()
+    return [_decode_candidate_row(dict(r)) for r in rows]
+
+
+def mark_candidate_invited(candidate_id):
+    """Record that a candidate's mode invite has been enqueued."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE candidates SET mode_status = 'INVITED' WHERE candidate_id = ?",
+        (candidate_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def clear_candidate_route(candidate_id):
+    """Reset routing fields when the recruiter re-assigns a candidate's mode
+    before any invitation was sent (mode_status back to SHORTLISTED)."""
+    conn = get_connection()
+    conn.execute(
+        """UPDATE candidates SET interview_mode = '', mode_status = 'SHORTLISTED',
+           mode_assignment_source = '' WHERE candidate_id = ?""",
+        (candidate_id,),
+    )
+    conn.commit()
+    conn.close()
 
 
 # --- notification outbox (email side-effect queue) ---
@@ -1690,6 +2197,17 @@ def get_notifications_for_application(application_id):
     rows = conn.execute(
         "SELECT * FROM notification_outbox WHERE application_id = ? ORDER BY id ASC",
         (application_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_outbox_messages():
+    """Every outbox message across all applications (used by tests + the
+    monitoring surface to enumerate modes/promotions without per-app queries)."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM notification_outbox ORDER BY id ASC"
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -1924,3 +2442,135 @@ def get_owned_scheduled_interviews(username):
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# --- LinkedIn integration (member posting; DB-authoritative publication state) ---
+
+def save_linkedin_connection(c):
+    """Persists one recruiter's LinkedIn OAuth connection (upsert by username)."""
+    conn = get_connection()
+    conn.execute(
+        """INSERT OR REPLACE INTO linkedin_connections
+        (recruiter_username, linkedin_member_id, member_name, member_email,
+         access_token, refresh_token, token_expires_at, scope, connected_at)
+        VALUES (:recruiter_username, :linkedin_member_id, :member_name, :member_email,
+                :access_token, :refresh_token, :token_expires_at, :scope, :connected_at)""",
+        {
+            "recruiter_username": c.recruiter_username,
+            "linkedin_member_id": c.linkedin_member_id,
+            "member_name": c.member_name,
+            "member_email": c.member_email,
+            "access_token": c.access_token,
+            "refresh_token": c.refresh_token,
+            "token_expires_at": c.token_expires_at,
+            "scope": c.scope,
+            "connected_at": str(c.connected_at),
+        },
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_linkedin_connection(username):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM linkedin_connections WHERE recruiter_username = ?", (username,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def delete_linkedin_connection(username):
+    conn = get_connection()
+    conn.execute(
+        "DELETE FROM linkedin_connections WHERE recruiter_username = ?", (username,)
+    )
+    conn.commit()
+    conn.close()
+
+
+def save_linkedin_oauth_state(state, username, redirect_uri, created_at, expires_at):
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO linkedin_oauth_states (state, recruiter_username, redirect_uri,
+           created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?)""",
+        (state, username, redirect_uri, str(created_at), str(expires_at)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def consume_linkedin_oauth_state(state, now=None):
+    """Atomically claims a one-time OAuth state row.
+
+    Returns the state row only when it was unused, unexpired, and this call won
+    the single-use claim; otherwise None. Prevents replay of the callback."""
+    now = now or _utcnow()
+    ts = str(now)
+    conn = get_connection()
+    cur = conn.execute(
+        """UPDATE linkedin_oauth_states SET used_at = ?
+           WHERE state = ? AND used_at IS NULL AND expires_at > ?""",
+        (ts, state, ts),
+    )
+    if cur.rowcount == 0:
+        conn.close()
+        return None
+    row = conn.execute(
+        "SELECT * FROM linkedin_oauth_states WHERE state = ?", (state,)
+    ).fetchone()
+    conn.commit()
+    conn.close()
+    return dict(row) if row else None
+
+
+def try_claim_linkedin_publish(job_id, allowed_from, stale_after_seconds=90):
+    """Grants the single in-flight publish claim.
+
+    One atomic UPDATE moves the job into 'PUBLISHING' only if its current
+    status is in allowed_from; this status flip is the DB-level lock that makes
+    double-click / retry produce a single LinkedIn post. A crash mid-publish
+    (process dies between claim and terminal write) would otherwise leave the
+    job stuck in PUBLISHING forever, so a claim older than stale_after_seconds
+    may be re-claimed by a later caller. Returns True when this caller won the
+    transition.
+    """
+    conn = get_connection()
+    now = str(_utcnow())
+    marks = ",".join("?" for _ in allowed_from)
+    cur = conn.execute(
+        f"""UPDATE job_postings
+            SET linkedin_post_status = 'PUBLISHING', linkedin_claim_started_at = ?
+            WHERE job_id = ? AND linkedin_post_status IN ({marks})""",
+        (now, job_id, *allowed_from),
+    )
+    if cur.rowcount == 0:
+        stale_before = str(_utcnow() - timedelta(seconds=stale_after_seconds))
+        cur = conn.execute(
+            """UPDATE job_postings
+               SET linkedin_post_status = 'PUBLISHING', linkedin_claim_started_at = ?
+               WHERE job_id = ? AND linkedin_post_status = 'PUBLISHING'
+                 AND linkedin_claim_started_at IS NOT NULL
+                 AND linkedin_claim_started_at < ?""",
+            (now, job_id, stale_before),
+        )
+    conn.commit()
+    conn.close()
+    return cur.rowcount == 1
+
+
+def set_job_linkedin_post(job_id, *, status, post_id=None, post_url=None,
+                          posted_at=None, author_urn=None, last_error=None):
+    conn = get_connection()
+    conn.execute(
+        """UPDATE job_postings SET
+           linkedin_post_status = ?, linkedin_post_id = ?,
+           linkedin_post_url = ?, linkedin_posted_at = ?,
+           linkedin_author_urn = ?, linkedin_last_error = ?,
+           linkedin_claim_started_at = NULL
+           WHERE job_id = ?""",
+        (status, post_id, post_url, posted_at, author_urn, last_error, job_id),
+    )
+    conn.commit()
+    conn.close()

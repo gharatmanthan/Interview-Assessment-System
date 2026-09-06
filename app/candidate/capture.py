@@ -16,7 +16,9 @@ import sounddevice as sd
 from scipy.io import wavfile
 from pathlib import Path
 
-OUTPUT_DIR = Path(__file__).parent.parent.parent / "data" / "recordings"
+from app.core.paths import get_recordings_dir
+
+OUTPUT_DIR = get_recordings_dir()
 
 
 class MediaCapture:

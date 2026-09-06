@@ -12,12 +12,13 @@ from pathlib import Path
 
 from app.core import db
 from app.core.models import Candidate
+from app.core.paths import get_resumes_dir
 from app.engine.resume_parser import parse_resume
 from app.engine.jd_matcher import match_resume_to_jd
 
 logger = logging.getLogger(__name__)
 
-RESUME_DIR = Path(__file__).parent.parent.parent / "data" / "resumes"
+RESUME_DIR = get_resumes_dir()
 
 
 def process_application(
@@ -98,16 +99,16 @@ def process_application(
     scheduled_at = None  # naive-UTC datetime of the booked interview, if any
     if send_invite and match_score >= threshold:
         try:
-            from app.core.settings_store import load_settings
+            from app.core.settings_store import frontend_base_url, load_settings
             from app.engine.email_intake import compose_invite_email, get_gmail_service
             from app.engine import scheduling
 
             settings = load_settings()
-            url = frontend_url or (
-                settings.get("remote_api_url", "")
-                if settings.get("backend_mode") == "remote"
-                else ""
-            )
+            # Candidate invite links must always point at the frontend origin
+            # (PUBLIC_APP_URL), never at remote_api_url: the API does not serve
+            # the Next.js routes (/candidate/entry). frontend_url overrides only
+            # when an explicit caller-supplied origin is provided.
+            url = frontend_url or frontend_base_url()
 
             # Auto-book the next free interview slot on the recruiter's calendar.
             allocated = scheduling.allocate_next_slot(candidate_id, job_id)

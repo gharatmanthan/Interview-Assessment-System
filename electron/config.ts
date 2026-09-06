@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { app } from 'electron';
 
 export type BackendMode = 'local' | 'remote';
 
@@ -18,21 +19,40 @@ export interface AppConfig {
 export const DEFAULT_REMOTE_URL = process.env.INTERVIEWIQ_DEFAULT_REMOTE_URL || '';
 
 /**
- * Connection config lives in data/settings.json — the same file
- * app/core/settings_store.py uses — so Python and Electron agree on one
- * source of truth. It is per-machine state (which backend THIS desktop app
- * talks to), deliberately not part of the shared central database.
+ * The ONE authoritative, per-user, writable data directory.
+ *
+ *  * Packaged: Electron's userData dir (%APPDATA%/InterviewIQ on Windows).
+ *    This is where app.db, recordings, uploads, resumes, live_frames,
+ *    face_profiles, models AND settings.json live. Never inside
+ *    process.resourcesPath (read-only/install dir).
+ *  * Dev: the repository's `data/` directory (repo layout).
+ *
+ * Python reads this same location via the INTERVIEWIQ_DATA_DIR env var set
+ * by main.ts when spawning the sidecar, so Electron and Python always agree
+ * on one data root — never two databases.
  */
-export function getSettingsPath(): string {
-  // electron/dist/config.js -> project root is two levels up.
-  // In a packaged app extraResources places data/ next to the app bundle;
-  // prefer resourcesPath/data when it exists, else fall back to the repo layout.
-  const fromDist = path.resolve(__dirname, '..', '..');
-  const packagedData = path.join(process.resourcesPath || '', 'data', 'settings.json');
-  if (process.resourcesPath && fs.existsSync(packagedData)) {
-    return packagedData;
+export function getUserDataDir(): string {
+  if (app && app.isPackaged) {
+    return app.getPath('userData');
   }
-  return path.join(fromDist, 'data', 'settings.json');
+  // Dev: repo data/ dir (two levels up from electron/dist).
+  return path.resolve(__dirname, '..', '..', 'data');
+}
+
+export function getSettingsPath(): string {
+  return path.join(getUserDataDir(), 'settings.json');
+}
+
+/**
+ * Directory containing the bundled Whisper model, or null in dev.
+ * Packaged: <resources>/whisper/faster-whisper-base
+ * Dev: null -> faster-whisper uses its default (HuggingFace) cache.
+ */
+export function getWhisperModelDir(): string | null {
+  if (app && app.isPackaged && process.resourcesPath) {
+    return path.join(process.resourcesPath, 'whisper', 'faster-whisper-base');
+  }
+  return null;
 }
 
 function readSettingsFile(): Record<string, unknown> {

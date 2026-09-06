@@ -30,11 +30,8 @@ export default function CandidateConsentPage() {
     if (!candidate) return
     setLoading(true)
     try {
-      const sessionId = crypto.randomUUID()
-      sessionStorage.setItem("session_id", sessionId)
-
       const interviewToken = sessionStorage.getItem("interview_token") || ""
-      await api.recordConsent(sessionId, candidate.candidate_id, interviewToken)
+      await api.recordConsent(candidate.candidate_id, interviewToken)
       toast.success("Consent recorded")
       router.push("/candidate/device-check")
     } catch (err: any) {

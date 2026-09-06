@@ -1,16 +1,30 @@
 import pytest
 from fastapi.testclient import TestClient
+from pathlib import Path
+
+# Import every module that calls dotenv.load_dotenv() at import time BEFORE any
+# test runs. A first-time import during a test would re-read the project .env
+# and re-add a real GROQ_API_KEY after isolated_env has removed it, silently
+# switching screening onto the non-deterministic LLM path. Pre-importing pins
+# those side effects to session start so every test starts key-free.
+from app.core import settings_store as _settings_store  # noqa: F401
+from app.engine import linkedin as _linkedin  # noqa: F401
+from app.engine import llm_client as _llm_client  # noqa: F401
 
 
 @pytest.fixture(autouse=True)
 def isolated_env(tmp_path, monkeypatch):
     import app.core.db as db
     import app.core.settings_store as settings_store
+    import app.core.database as database
     import api.routes.candidates as candidates_route
     import api.routes.public_apply as public_apply_route
     import api.rate_limit as rate_limit
 
-    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test_app.db")
+    # Override SQLite path for testing
+    database.get_db_config().set_sqlite_path(tmp_path / "test_app.db")
+    # Reset the database engine to pick up the new path
+    database.set_database_engine(None)
     monkeypatch.setattr(settings_store, "SETTINGS_PATH", tmp_path / "settings.json")
     monkeypatch.setattr(candidates_route, "RESUME_DIR", tmp_path / "resumes")
     monkeypatch.setattr(public_apply_route, "RESUME_DIR", tmp_path / "apply_resumes")

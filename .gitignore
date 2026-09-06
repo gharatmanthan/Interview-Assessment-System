@@ -18,8 +18,15 @@ frontend/out/
 electron/dist/
 electron/release/
 
+# Packaged build output (portable bundle + installers)
+release/
+
 # Data (user-specific)
 data/
+
+# OAuth client secrets must never be committed or bundled
+data/client_secret.json
+*.client_secret.json
 
 
 # IDE

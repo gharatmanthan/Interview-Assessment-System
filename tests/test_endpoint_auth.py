@@ -13,13 +13,22 @@ from app.core import db
 
 def _sponsor_candidate(public_client, resolve_code=True):
     """Seed a candidate through the real public invite flow and return
-    (candidate, interview_token)."""
-    from app.core.models import InterviewInvite
+    (candidate, interview_token).
+
+    The candidate is pre-linked to a real, backed sessions row (as if the
+    server had already created it), so start-session treats that id as the
+    authoritative session and returns it unchanged."""
+    from app.core.models import InterviewInvite, InterviewSession
 
     db.save_job_posting(_job())
     db.save_candidate(
         _cand("c-a", "Sess Owner", "owner@example.com", session_id="sess-owner")
     )
+    db.save_session(InterviewSession(
+        session_id="sess-owner", candidate_name="Sess Owner",
+        job_title="Secure Engineer", job_id="job-sec",
+        status="in_progress",
+    ))
     invite = InterviewInvite(
         candidate_id="c-a", job_id="job-sec", application_id=None,
         token="sec-invite-xyz",
@@ -31,7 +40,7 @@ def _sponsor_candidate(public_client, resolve_code=True):
     token = v.json()["interview_token"]
     # start the session so the candidate row is linked to it
     r = public_client.post("/api/candidate/start-session", json={
-        "session_id": "sess-owner", "interview_token": token,
+        "interview_token": token,
     })
     assert r.status_code == 200
     return db.get_candidate("c-a"), token

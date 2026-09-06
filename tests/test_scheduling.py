@@ -301,10 +301,18 @@ def test_email_auto_invite_queues_invite_and_allocates_on_flush(mock_gmail, mock
 
     assert results[0]["status"] == "invited"
 
-    # The invite is queued in the outbox (deferred delivery), not sent inline.
+    # No invite is enqueued by screening alone — the candidate is only
+    # SHORTLISTED and the job awaits strategy confirmation.
+    assert db.get_pending_notifications() == []
+    cand = db.get_candidates_for_job("job-1")[0]
+    assert cand["mode_status"] == "SHORTLISTED"
+
+    # Confirming a Mode-1 strategy releases the candidate invite (mode1_invite).
+    from app.screening.routing import confirm_strategy
+    confirm_strategy("job-1", "MODE_1_ONLY")
     pending = db.get_pending_notifications()
     assert len(pending) == 1
-    assert pending[0]["notification_type"] == "interview_invite"
+    assert pending[0]["notification_type"] == "mode1_invite"
 
     # Flush the outbox: this allocates the calendar slot and sends via Gmail.
     with patch("app.screening.email_worker.get_gmail_service", return_value=gmail):

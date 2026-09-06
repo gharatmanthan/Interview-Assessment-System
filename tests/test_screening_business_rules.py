@@ -121,18 +121,20 @@ class TestSpectrumOfApplicants:
         assert v.json()["candidate"].get("invite_code") is None  # not echoed
 
         consent = public_client.post("/api/candidate/consent", json={
-            "session_id": "s-accept", "interview_token": token,
+            "interview_token": token,
         })
         assert consent.json()["success"] is True
+        session_id = consent.json()["session_id"]
 
         start = public_client.post("/api/candidate/start-session", json={
-            "session_id": "s-accept", "interview_token": token,
+            "interview_token": token,
         })
         assert start.status_code == 200
         assert start.json()["candidate_name"] == "Alice Good"
+        assert start.json()["session_id"] == session_id
 
         answer = public_client.post("/api/candidate/submit-answer", json={
-            "session_id": "s-accept", "question_id": "q1", "category": "technical",
+            "session_id": session_id, "question_id": "q1", "category": "technical",
             "transcript": "I would profile the endpoint, isolate the slow query, add an index.",
             "interview_token": token,
         })
@@ -140,7 +142,7 @@ class TestSpectrumOfApplicants:
 
         done = public_client.post(
             "/api/candidate/complete-session",
-            json={"session_id": "s-accept", "interview_token": token},
+            json={"session_id": session_id, "interview_token": token},
         )
         assert done.json()["success"] is True
 

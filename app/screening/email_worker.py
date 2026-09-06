@@ -4,8 +4,14 @@ Gmail. Gmail being unavailable is NOT a failure of the application/screening
 transaction — messages simply stay pending and are retried later.
 
 Notification types:
-  * 'interview_invite' -> the shortlisted candidate's timed interview invite
-  * 'hr_shortlist'     -> a shortlist digest to the recruiter's HR inbox
+  * 'interview_invite'  -> Mode 1 timed invite (legacy path, e.g. resend flow)
+                            auto-books a live-interview slot on send
+  * 'mode1_invite'      -> Mode 1 direct invite (AUTO / MODE_1_ONLY cohorts)
+                            auto-books a live-interview slot on send
+  * 'mode2_invite'      -> Mode 2 self-serve interview invite (no slot)
+  * 'mode1_promotion'   -> Mode 2 -> Mode 1 promotion invite (auto-books)
+  * 'not_selected'      -> candidate not promoted after Mode 2 (no slot)
+  * 'hr_shortlist'      -> a shortlist digest to the recruiter's HR inbox
 
 Maximum attempts before a message is marked failed (so operators can see a
 genuinely stuck message instead of infinite retries).
@@ -15,8 +21,14 @@ import logging
 from email.mime.text import MIMEText
 
 from app.core import db
-from app.core.settings_store import load_settings
-from app.engine.email_intake import compose_invite_email, get_gmail_service
+from app.core.settings_store import frontend_base_url, load_settings
+from app.engine.email_intake import (
+    compose_invite_email,
+    compose_mode2_invite_email,
+    compose_not_selected_email,
+    compose_promotion_email,
+    get_gmail_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +36,10 @@ MAX_NOTIFICATION_ATTEMPTS = 3
 
 
 def _frontend_url() -> str:
-    settings = load_settings()
-    if settings.get("backend_mode") == "remote":
-        return settings.get("remote_api_url", "")
-    return ""
+    # Candidate-facing invite links must always point at the frontend origin
+    # (PUBLIC_APP_URL) which serves /candidate/entry — never at remote_api_url
+    # (the API origin, which does not serve the Next.js routes).
+    return frontend_base_url()
 
 
 def compose_hr_shortlist_email(candidate: dict, job: dict, ats_score=None) -> dict:
@@ -44,6 +56,21 @@ def compose_hr_shortlist_email(candidate: dict, job: dict, ats_score=None) -> di
     return {"subject": subject, "body": "\n".join(lines)}
 
 
+def _allocated_slot(candidate, job) -> object:
+    """Best-effort live-interview slot allocation. Returns the scheduled_at
+    (or None) — the calendar must never block an invite from sending."""
+    try:
+        from app.engine import scheduling
+        allocated = scheduling.allocate_next_slot(candidate["candidate_id"], job["job_id"])
+        if "error" not in allocated and allocated.get("scheduled_at"):
+            return allocated["scheduled_at"]
+    except Exception as exc:
+        logger.warning(
+            "auto-booking failed for %s: %s", candidate["candidate_id"], exc
+        )
+    return None
+
+
 def _send_gmail(notification: dict) -> None:
     """Compose + send one outbox message via Gmail. Raises on failure."""
     settings = load_settings()
@@ -56,27 +83,50 @@ def _send_gmail(notification: dict) -> None:
     if not job:
         raise RuntimeError("job lookup failed when composing email")
 
-    if notification["notification_type"] == "interview_invite":
-        if not candidate:
-            raise RuntimeError("candidate lookup failed for interview invite")
-        invite_code = candidate["invite_code"]
-        scheduled_at = None
-        try:
-            from app.engine import scheduling
-            allocated = scheduling.allocate_next_slot(candidate["candidate_id"], job["job_id"])
-            if "error" not in allocated and allocated.get("scheduled_at"):
-                scheduled_at = allocated["scheduled_at"]
-        except Exception as exc:  # best-effort: calendar must never block the invite
-            logger.warning("auto-booking failed for %s: %s", candidate["candidate_id"], exc)
+    ntype = notification["notification_type"]
+    auto_book = ntype in ("interview_invite", "mode1_invite", "mode1_promotion")
 
-        msg = compose_invite_email(
+    if auto_book:
+        if not candidate:
+            raise RuntimeError("candidate lookup failed for mode 1 invite")
+        invite_code = candidate["invite_code"]
+        scheduled_at = _allocated_slot(candidate, job)
+        if ntype == "mode1_promotion":
+            msg = compose_promotion_email(
+                {"name": candidate["name"], "email": candidate["email"]},
+                {"title": job["title"]},
+                invite_code,
+                _frontend_url(),
+                scheduled_at,
+            )
+            subject = f"You've advanced to the final round \u2014 {job['title']}"
+        else:
+            msg = compose_invite_email(
+                {"name": candidate["name"], "email": candidate["email"]},
+                {"title": job["title"]},
+                invite_code,
+                _frontend_url(),
+                scheduled_at,
+            )
+            subject = f"You've been shortlisted for an interview \u2014 {job['title']}"
+    elif ntype == "mode2_invite":
+        if not candidate:
+            raise RuntimeError("candidate lookup failed for mode 2 invite")
+        msg = compose_mode2_invite_email(
             {"name": candidate["name"], "email": candidate["email"]},
             {"title": job["title"]},
-            invite_code,
+            candidate["invite_code"],
             _frontend_url(),
-            scheduled_at,
         )
-        subject = f"You've been shortlisted for an interview \u2014 {job['title']}"
+        subject = f"Your self-serve interview \u2014 {job['title']}"
+    elif ntype == "not_selected":
+        if not candidate:
+            raise RuntimeError("candidate lookup failed for not-selected email")
+        msg = compose_not_selected_email(
+            {"name": candidate["name"], "email": candidate["email"]},
+            {"title": job["title"]},
+        )
+        subject = f"Update on your application \u2014 {job['title']}"
     else:  # hr_shortlist
         app_id = notification.get("application_id")
         result = db.get_screening_result(app_id) if app_id else None
@@ -96,7 +146,8 @@ def _send_gmail(notification: dict) -> None:
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     service.users().messages().send(userId="me", body={"raw": raw}).execute()
 
-    if notification["notification_type"] == "interview_invite" and candidate:
+    if ntype in ("interview_invite", "mode1_invite", "mode2_invite",
+                 "mode1_promotion") and candidate:
         db.update_candidate_invite_email_sent(candidate["candidate_id"], True)
 
 

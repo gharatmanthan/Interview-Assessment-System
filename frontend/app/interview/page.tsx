@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -14,7 +15,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { api, getBaseUrl, getAuthToken } from "@/lib/api"
-import type { InterviewSession, IntegrityFlag } from "@/lib/types"
+import { connectRecruiterLive } from "@/lib/live"
+import type { InterviewSession, IntegrityFlag, Candidate, QuestionItem, LiveServerMessage, InterviewStatusResponse } from "@/lib/types"
 import {
   Camera,
   Play,
@@ -28,6 +30,12 @@ import {
   Loader2,
   Wifi,
   WifiOff,
+  Sparkles,
+  RotateCcw,
+  Lock,
+  MessageSquarePlus,
+  CircleStop,
+  User,
 } from "lucide-react"
 
 const QUESTIONS = [
@@ -85,12 +93,60 @@ export default function InterviewPage() {
   const [category, setCategory] = useState("behavioral")
   const [integrityFlags, setIntegrityFlags] = useState<IntegrityFlag[]>([])
   const [scoringResult, setScoringResult] = useState<ScoringResult | null>(null)
-  const [candidateName, setCandidateName] = useState("")
   const [jobTitle, setJobTitle] = useState("")
   const [elapsedTime, setElapsedTime] = useState(0)
   const [wsConnected, setWsConnected] = useState(false)
   const [scoringLoading, setScoringLoading] = useState(false)
   const [cameraActive, setCameraActive] = useState(false)
+  const [candidates, setCandidates] = useState<Candidate[]>([])
+  const [selectedCandidateId, setSelectedCandidateId] = useState("")
+  const [candidatesLoading, setCandidatesLoading] = useState(false)
+
+  // Phase 3B: MODE 2 self-serve interview status for the selected candidate.
+  const [interviewStatus, setInterviewStatus] = useState<InterviewStatusResponse | null>(null)
+
+  const interviewStatusLabel = (s: string | undefined) =>
+    ({ not_ready: "Not prepared", ready: "Ready", in_progress: "In progress", completed: "Completed" }[s ?? ""] ?? "—")
+
+  const [preparedQuestions, setPreparedQuestions] = useState<QuestionItem[]>([])
+  const [questionsPreparing, setQuestionsPreparing] = useState(false)
+  const [numQuestions, setNumQuestions] = useState(10)
+
+  // Phase 3A: MODE 1 live interview state.
+  const liveWsRef = useRef<WebSocket | null>(null)
+  const currentQuestionSet = useRef<Set<string>>(new Set())
+  const preparedQuestionsRef = useRef<QuestionItem[]>([])
+  const [liveConnected, setLiveConnected] = useState(false)
+  const [recruiterLive, setRecruiterLive] = useState(false)
+  const [candidateLive, setCandidateLive] = useState(false)
+  const [liveCurrentQuestion, setLiveCurrentQuestion] = useState<QuestionItem | null>(null)
+  const [liveTranscript, setLiveTranscript] = useState("")
+  const [liveAsking, setLiveAsking] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setCandidatesLoading(true)
+    api.getCandidates()
+      .then((list) => {
+        if (!cancelled) setCandidates(list)
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setCandidatesLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  // Fetch the Mode 2 interview status + question-set summary for the selected
+  // candidate so the recruiter sees Not prepared / Ready / In progress /
+  // Completed without needing a live connection.
+  useEffect(() => {
+    let cancelled = false
+    setInterviewStatus(null)
+    if (!selectedCandidateId) return
+    api.getCandidateInterviewStatus(selectedCandidateId)
+      .then((s) => { if (!cancelled) setInterviewStatus(s) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [selectedCandidateId])
 
   const startCamera = useCallback(async () => {
     try {
@@ -180,23 +236,46 @@ export default function InterviewPage() {
   }, [])
 
   const handleStartSession = async () => {
-    if (!candidateName.trim()) return
-    const sessionId = crypto.randomUUID()
+    if (!selectedCandidateId) return
+    const selected = candidates.find((c) => c.candidate_id === selectedCandidateId)
     try {
-      const created = await api.createSession({
-        session_id: sessionId,
-        candidate_name: candidateName,
-        job_title: jobTitle,
-      })
+      const created = await api.createSession({ candidate_id: selectedCandidateId })
       setSession(created)
+      setJobTitle(created.job_title || selected?.job_title || "")
       setIsRecording(true)
       setElapsedTime(0)
       setIntegrityFlags([])
       setScoringResult(null)
-      await connectIntegrityMonitor(sessionId)
+      await connectIntegrityMonitor(created.session_id)
       await startCamera()
     } catch (err) {
       console.error("Failed to create session:", err)
+    }
+  }
+
+  const handlePrepareQuestions = async () => {
+    if (!session || questionsPreparing) return
+    setQuestionsPreparing(true)
+    try {
+      const res = await api.selectQuestions(session.session_id, numQuestions)
+      setPreparedQuestions(res.questions)
+    } catch (err) {
+      console.error("Failed to prepare questions:", err)
+    } finally {
+      setQuestionsPreparing(false)
+    }
+  }
+
+  const handleRegenerateQuestions = async () => {
+    if (!session || questionsPreparing) return
+    setQuestionsPreparing(true)
+    try {
+      const res = await api.selectQuestions(session.session_id, numQuestions)
+      setPreparedQuestions(res.questions)
+    } catch (err) {
+      console.error("Failed to regenerate questions:", err)
+    } finally {
+      setQuestionsPreparing(false)
     }
   }
 
@@ -224,6 +303,109 @@ export default function InterviewPage() {
       setScoringLoading(false)
     }
   }
+
+  // Phase 3A: MODE 1 shared live interview. The recruiter connects with their
+  // Bearer token; server auth resolves the role and the owned session.
+  const liveSend = (payload: Record<string, unknown>) => {
+    if (liveWsRef.current?.readyState === WebSocket.OPEN) {
+      liveWsRef.current.send(JSON.stringify(payload))
+    }
+  }
+
+  const handleLiveMessage = useCallback((msg: LiveServerMessage) => {
+    switch (msg.type) {
+      case "joined": {
+        setLiveConnected(true)
+        setRecruiterLive((msg.role ?? "candidate") === "recruiter")
+        setCandidateLive((msg.connections?.candidate ?? 0) > 0)
+        // Find the persisted live question among prepared questions.
+        if (msg.current_question) {
+          const found = preparedQuestionsRef.current.find(
+            (q) => q.question_id === msg.current_question?.question_id
+          )
+          setLiveCurrentQuestion(found ?? msg.current_question!)
+          setLiveTranscript("")
+        } else {
+          setLiveCurrentQuestion(null)
+        }
+        break
+      }
+      case "connection_status": {
+        setRecruiterLive((msg.recruiter ?? 0) > 0)
+        setCandidateLive((msg.candidate ?? 0) > 0)
+        break
+      }
+      case "transcript_ready": {
+        setLiveTranscript(msg.transcript ?? "")
+        break
+      }
+      case "answer_started": {
+        setLiveTranscript("")
+        break
+      }
+      case "interview_ended": {
+        setLiveConnected(false)
+        break
+      }
+      default:
+        break
+    }
+  }, [])
+
+  const connectLive = async () => {
+    if (!session) return
+    const token = await getAuthToken()
+    if (!token) { toast.error("Not authenticated"); return }
+    connectRecruiterLive(
+      { token, sessionId: session.session_id },
+      {
+        onOpen: () => { setRecruiterLive(true) },
+        onClose: () => { setLiveConnected(false); setRecruiterLive(false) },
+        onMessage: handleLiveMessage,
+      }
+    ).then((ws) => { liveWsRef.current = ws })
+  }
+
+  const disconnectLive = () => {
+    liveWsRef.current?.close()
+    liveWsRef.current = null
+    setLiveConnected(false)
+    setRecruiterLive(false)
+    setCandidateLive(false)
+  }
+
+  // Ask the next prepared question that has not yet been asked.
+  const handleAskNextQuestion = async () => {
+    if (!liveWsRef.current || liveWsRef.current.readyState !== WebSocket.OPEN) return
+    const asked = currentQuestionSet.current
+    setLiveAsking(true)
+    try {
+      const next = preparedQuestionsRef.current.find((q) => !asked.has(q.question_id))
+      if (!next) {
+        toast.info("All prepared questions have been asked.")
+        return
+      }
+      setLiveCurrentQuestion(next)
+      setLiveTranscript("")
+      currentQuestionSet.current.add(next.question_id)
+      liveSend({ type: "ask_question", question_id: next.question_id })
+    } finally {
+      setLiveAsking(false)
+    }
+  }
+
+  const handleEndLiveInterview = async () => {
+    if (!liveWsRef.current || liveWsRef.current.readyState !== WebSocket.OPEN) return
+    toast("Ending live interview…")
+    liveSend({ type: "end_interview" })
+    setLiveConnected(false)
+  }
+
+  // Keep prepared questions mirrored for the live message handler.
+  useEffect(() => {
+    preparedQuestionsRef.current = preparedQuestions
+  }, [preparedQuestions])
+
 
   useEffect(() => {
     if (isRecording) {
@@ -254,7 +436,7 @@ export default function InterviewPage() {
           <div className="flex flex-col gap-6 lg:col-span-3">
             <div className="flex items-center justify-between">
               <h1 className="text-2xl font-bold tracking-tight text-foreground">Interview Session</h1>
-              <Button onClick={isRecording ? handleStopSession : handleStartSession} variant={isRecording ? "destructive" : "default"} disabled={!isRecording && !candidateName.trim()} size="lg">
+                <Button onClick={isRecording ? handleStopSession : handleStartSession} variant={isRecording ? "destructive" : "default"} disabled={!isRecording && !selectedCandidateId} size="lg">
                 {isRecording ? (<><Square className="mr-2 h-4 w-4" /> Stop Session</>) : (<><Play className="mr-2 h-4 w-4" /> Start Session</>)}
               </Button>
             </div>
@@ -363,12 +545,29 @@ export default function InterviewPage() {
               <CardHeader><CardTitle className="text-base">Session Info</CardTitle></CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <label className="text-sm font-medium text-foreground">Candidate Name</label>
-                  <Input placeholder="Enter candidate name" value={candidateName} onChange={(e) => setCandidateName(e.target.value)} disabled={isRecording} />
+                  <label className="text-sm font-medium text-foreground">Candidate</label>
+                  {candidatesLoading ? (
+                    <div className="text-sm text-muted-foreground">Loading candidates...</div>
+                  ) : (
+                    <Select
+                      value={selectedCandidateId}
+                      onValueChange={setSelectedCandidateId}
+                      disabled={isRecording}
+                    >
+                      <SelectTrigger className="w-full"><SelectValue placeholder="Select a candidate" /></SelectTrigger>
+                      <SelectContent>
+                        {candidates.map((c) => (
+                          <SelectItem key={c.candidate_id} value={c.candidate_id}>
+                            {c.name}{c.job_title ? ` — ${c.job_title}` : ""} ({c.status})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">Job Title</label>
-                  <Input placeholder="Enter job title" value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} disabled={isRecording} />
+                  <Input placeholder={jobTitle || "Resolved from candidate"} value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} disabled={isRecording} />
                 </div>
                 <div className="flex items-center justify-between border-t border-border pt-4">
                   <div className="flex items-center gap-2 text-muted-foreground">
@@ -380,6 +579,180 @@ export default function InterviewPage() {
                   <span className="text-sm text-muted-foreground">Status</span>
                   <Badge variant={isRecording ? "default" : "secondary"}>{session?.status ?? "idle"}</Badge>
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader><CardTitle className="text-base">Interview Status</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                {!selectedCandidateId ? (
+                  <p className="text-sm text-muted-foreground">Select a candidate to see their interview status.</p>
+                ) : interviewStatus ? (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">Stage</span>
+                      <Badge variant={interviewStatus.interview_status === "completed" ? "default" : "secondary"}>
+                        {interviewStatusLabel(interviewStatus.interview_status)}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">Question set</span>
+                      <span className="text-foreground">{interviewStatus.locked ? "Locked" : "Not prepared"}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">Questions</span>
+                      <span className="text-foreground">{interviewStatus.answered_questions} / {interviewStatus.total_questions} answered</span>
+                    </div>
+                    {interviewStatus.categories.length > 0 && (
+                      <div className="flex flex-wrap gap-1 pt-1">
+                        {interviewStatus.categories.map((cat) => (
+                          <span key={cat} className="rounded-full border border-input px-2 py-0.5 text-[11px] text-muted-foreground">
+                            {cat}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground">Loading…</p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Sparkles className="h-4 w-4" /> AI Question Set
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-xs text-muted-foreground">
+                  Generate/select a question set tailored to the job description, then lock it to
+                  this session. Once locked, the candidate receives exactly these questions — no
+                  regeneration after the interview starts.
+                </p>
+
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min={3}
+                    max={20}
+                    value={numQuestions}
+                    onChange={(e) => setNumQuestions(parseInt(e.target.value || "10", 10))}
+                    disabled={preparedQuestions.length > 0}
+                    className="w-24"
+                  />
+                  <Button
+                    onClick={handlePrepareQuestions}
+                    disabled={!session || questionsPreparing || preparedQuestions.length > 0}
+                    variant="outline"
+                    className="flex-1"
+                  >
+                    {questionsPreparing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                    Prepare Questions
+                  </Button>
+                </div>
+
+                {preparedQuestions.length > 0 && (
+                  <>
+                    <div className="max-h-64 space-y-2 overflow-y-auto rounded-md border border-border p-3">
+                      {preparedQuestions.map((q) => (
+                        <div key={q.question_id} className="flex items-start gap-2 text-xs">
+                          <span className="mt-0.5 shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                            {q.question_index + 1}
+                          </span>
+                          <div className="flex-1">
+                            <p className="text-foreground">{q.question_text}</p>
+                            <p className="mt-0.5 text-muted-foreground">
+                              {q.category} · {q.difficulty} · {q.source}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        onClick={handleRegenerateQuestions}
+                        disabled={questionsPreparing}
+                        variant="ghost"
+                        size="sm"
+                        className="gap-1 text-xs"
+                      >
+                        <RotateCcw className="h-3 w-3" /> Regenerate
+                      </Button>
+                      <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
+                        <Lock className="h-3 w-3" /> Locked to session
+                      </div>
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader><CardTitle className="text-base">Live Interview</CardTitle></CardHeader>
+              <CardContent className="space-y-4">
+                {!liveConnected ? (
+                  <Button
+                    onClick={connectLive}
+                    disabled={!session}
+                    className="w-full"
+                    variant="outline"
+                  >
+                    <Wifi className="mr-2 h-4 w-4" /> Connect to Live Session
+                  </Button>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <span className={`h-2 w-2 rounded-full ${recruiterLive ? "bg-success" : "bg-muted"}`} />
+                        Recruiter {recruiterLive ? "online" : "offline"}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className={`h-2 w-2 rounded-full ${candidateLive ? "bg-success" : "bg-muted"}`} />
+                        Candidate {candidateLive ? "online" : "offline"}
+                      </span>
+                      <span className="ml-auto flex items-center gap-1">
+                        {candidateLive ? <Wifi className="h-3 w-3 text-success" /> : <WifiOff className="h-3 w-3 text-destructive" />}
+                      </span>
+                    </div>
+
+                    <div className="rounded-md border border-border p-3">
+                      <p className="mb-1 text-xs font-medium text-muted-foreground">Current question</p>
+                      {liveCurrentQuestion ? (
+                        <p className="text-sm text-foreground">{liveCurrentQuestion.question_text}</p>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No question asked yet.</p>
+                      )}
+                    </div>
+
+                    <div className="rounded-md border border-border p-3">
+                      <p className="mb-1 text-xs font-medium text-muted-foreground">Candidate answer (transcript)</p>
+                      {liveTranscript ? (
+                        <p className="text-sm whitespace-pre-wrap text-foreground">{liveTranscript}</p>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">Waiting for the candidate to answer…</p>
+                      )}
+                    </div>
+
+                    <Button
+                      onClick={handleAskNextQuestion}
+                      disabled={liveAsking || !candidateLive || preparedQuestions.length === 0}
+                      className="w-full"
+                    >
+                      {liveAsking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MessageSquarePlus className="mr-2 h-4 w-4" />}
+                      Ask Next Question
+                    </Button>
+
+                    <Button
+                      onClick={handleEndLiveInterview}
+                      variant="destructive"
+                      className="w-full"
+                    >
+                      <CircleStop className="mr-2 h-4 w-4" /> End Interview
+                    </Button>
+                  </>
+                )}
               </CardContent>
             </Card>
 

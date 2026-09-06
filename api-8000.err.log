@@ -1,0 +1,32 @@
+Groq API returned HTTP 400 (no retry): 400 Client Error: Bad Request for url: https://api.groq.com/openai/v1/chat/completions
+match_resume_to_jd: LLM semantic matching failed (HTTPError: 400 Client Error: Bad Request for url: https://api.groq.com/openai/v1/chat/completions) — falling back to keyword-overlap heuristic
+Groq API returned HTTP 429 (no retry): 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions
+parse_resume: LLM parsing failed (HTTPError: 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions) — falling back to regex heuristic
+Groq API returned HTTP 429 (no retry): 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions
+match_resume_to_jd: LLM semantic matching failed (HTTPError: 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions) — falling back to keyword-overlap heuristic
+Groq API returned HTTP 429 (no retry): 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions
+parse_resume: LLM parsing failed (HTTPError: 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions) — falling back to regex heuristic
+Groq API returned HTTP 429 (no retry): 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions
+match_resume_to_jd: LLM semantic matching failed (HTTPError: 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions) — falling back to keyword-overlap heuristic
+Groq API returned HTTP 400 (no retry): 400 Client Error: Bad Request for url: https://api.groq.com/openai/v1/chat/completions
+match_resume_to_jd: LLM semantic matching failed (HTTPError: 400 Client Error: Bad Request for url: https://api.groq.com/openai/v1/chat/completions) — falling back to keyword-overlap heuristic
+Groq API returned HTTP 429 (no retry): 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions
+parse_resume: LLM parsing failed (HTTPError: 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions) — falling back to regex heuristic
+Groq API returned HTTP 429 (no retry): 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions
+match_resume_to_jd: LLM semantic matching failed (HTTPError: 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions) — falling back to keyword-overlap heuristic
+Groq API returned HTTP 429 (no retry): 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions
+parse_resume: LLM parsing failed (HTTPError: 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions) — falling back to regex heuristic
+Groq API returned HTTP 429 (no retry): 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions
+match_resume_to_jd: LLM semantic matching failed (HTTPError: 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions) — falling back to keyword-overlap heuristic
+Groq API returned HTTP 429 (no retry): 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions
+match_resume_to_jd: LLM semantic matching failed (HTTPError: 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions) — falling back to keyword-overlap heuristic
+Groq API returned HTTP 400 (no retry): 400 Client Error: Bad Request for url: https://api.groq.com/openai/v1/chat/completions
+match_resume_to_jd: LLM semantic matching failed (HTTPError: 400 Client Error: Bad Request for url: https://api.groq.com/openai/v1/chat/completions) — falling back to keyword-overlap heuristic
+Groq API returned HTTP 429 (no retry): 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions
+parse_resume: LLM parsing failed (HTTPError: 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions) — falling back to regex heuristic
+Groq API returned HTTP 429 (no retry): 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions
+match_resume_to_jd: LLM semantic matching failed (HTTPError: 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions) — falling back to keyword-overlap heuristic
+Groq API returned HTTP 429 (no retry): 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions
+parse_resume: LLM parsing failed (HTTPError: 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions) — falling back to regex heuristic
+Groq API returned HTTP 429 (no retry): 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions
+match_resume_to_jd: LLM semantic matching failed (HTTPError: 429 Client Error: Too Many Requests for url: https://api.groq.com/openai/v1/chat/completions) — falling back to keyword-overlap heuristic

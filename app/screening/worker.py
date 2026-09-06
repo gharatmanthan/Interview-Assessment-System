@@ -44,6 +44,10 @@ def _outbox_loop():
     while True:
         try:
             send_pending_notifications(limit=20)
+            # AUTO jobs confirmed while screening was still draining are
+            # assigned modes here too (invites stay gated on confirmation).
+            from app.screening.routing import route_pending_assignments
+            route_pending_assignments(limit=20)
         except Exception as exc:
             logger.exception("outbox worker crashed cycle: %s", exc)
         time.sleep(OUTBOX_POLL_SECONDS)
@@ -55,7 +59,10 @@ def start_workers() -> list[threading.Thread]:
     global _worker_threads
     if not workers_enabled():
         return []
-    if all(t.is_alive() for t in _worker_threads):
+    # Only skip starting when worker threads actually exist and are alive.
+    # `all([])` is True, so an empty list must NOT short-circuit the first call
+    # (which would silently never start the background workers).
+    if _worker_threads and all(t.is_alive() for t in _worker_threads):
         return _worker_threads
 
     targets = [("screening-worker", _screening_loop), ("outbox-worker", _outbox_loop)]

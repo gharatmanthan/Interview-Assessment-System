@@ -16,8 +16,9 @@ from scipy.stats import pearsonr
 import joblib
 
 from app.engine.feature_extraction import extract_features, features_to_vector, FEATURE_ORDER
+from app.core.paths import get_models_dir
 
-MODEL_DIR = Path(__file__).parent.parent.parent / "data" / "models"
+MODEL_DIR = get_models_dir()
 MODEL_PATH = MODEL_DIR / "trained_scorer.joblib"
 METRICS_PATH = MODEL_DIR / "trained_scorer_metrics.json"
 

@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react"
 import { toast } from "sonner"
 import { api } from "@/lib/api"
-import type { Settings, DeviceInfo, GmailStatus, CalendarStatus } from "@/lib/types"
+import type { Settings, DeviceInfo, GmailStatus, CalendarStatus, LinkedInStatus } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -12,7 +12,7 @@ import { Separator } from "@/components/ui/separator"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import { Loader2, Globe, Laptop, Mail, Unlink, CalendarDays } from "lucide-react"
+import { Loader2, Globe, Laptop, Mail, Unlink, CalendarDays, Linkedin, RefreshCw } from "lucide-react"
 
 interface ConnectionConfig {
   backendMode: string
@@ -50,21 +50,25 @@ export default function SettingsPage() {
   const [gmailLoading, setGmailLoading] = useState(false)
   const [calendarStatus, setCalendarStatus] = useState<CalendarStatus>({ connected: false, email: "" })
   const [calendarLoading, setCalendarLoading] = useState(false)
+  const [linkedinStatus, setLinkedinStatus] = useState<LinkedInStatus>({ connected: false, member_name: "", member_email: "", member_author_urn: "" })
+  const [linkedinLoading, setLinkedinLoading] = useState(false)
 
   const fetchData = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [settingsData, deviceList, gmailData, calendarData] = await Promise.all([
+      const [settingsData, deviceList, gmailData, calendarData, linkedinData] = await Promise.all([
         api.getSettings(),
         api.getDevices(),
         api.getGmailStatus(),
         api.getCalendarStatus(),
+        api.getLinkedinStatus(),
       ])
       setSettings(settingsData)
       setDevices(deviceList)
       setGmailStatus(gmailData)
       setCalendarStatus(calendarData)
+      setLinkedinStatus(linkedinData)
     } catch (err: any) {
       setError(err.message || "Failed to load settings")
       toast.error("Failed to load settings")
@@ -74,6 +78,30 @@ export default function SettingsPage() {
   }, [])
 
   useEffect(() => { fetchData() }, [fetchData])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const result = params.get("linkedin")
+    if (result === "connected") {
+      toast.success("LinkedIn connected")
+      refreshLinkedinStatus()
+    } else if (result === "failed") {
+      const reason = params.get("reason")
+      toast.error(reason === "denied" ? "LinkedIn sign-in was cancelled" : "LinkedIn connection failed")
+    }
+    if (result) {
+      window.history.replaceState({}, "", window.location.pathname)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function refreshLinkedinStatus() {
+    try {
+      const s = await api.getLinkedinStatus()
+      setLinkedinStatus(s)
+    } catch {
+    }
+  }
 
   const loadConnection = useCallback(async () => {
     try {
@@ -184,6 +212,36 @@ export default function SettingsPage() {
       toast.error(err.message || "Failed to disconnect Calendar")
     } finally {
       setCalendarLoading(false)
+    }
+  }
+
+  async function handleLinkedinConnect() {
+    setLinkedinLoading(true)
+    try {
+      const res = await api.connectLinkedin()
+      if (!res.authorization_url) {
+        toast.error("LinkedIn app is not configured on the server.")
+        return
+      }
+      window.open(res.authorization_url, "_blank", "noopener,noreferrer")
+      toast.info("Complete LinkedIn sign-in in the new tab, then return here.")
+    } catch (err: any) {
+      toast.error(err.message || "Failed to start LinkedIn connection")
+    } finally {
+      setLinkedinLoading(false)
+    }
+  }
+
+  async function handleLinkedinDisconnect() {
+    setLinkedinLoading(true)
+    try {
+      await api.disconnectLinkedin()
+      setLinkedinStatus({ connected: false, member_name: "", member_email: "", member_author_urn: "" })
+      toast.success("LinkedIn disconnected")
+    } catch (err: any) {
+      toast.error(err.message || "Failed to disconnect LinkedIn")
+    } finally {
+      setLinkedinLoading(false)
     }
   }
 
@@ -350,6 +408,44 @@ const WEEKDAYS = [
                 ) : (
                   <Button type="button" variant="outline" onClick={handleCalendarConnect} disabled={calendarLoading}>
                     {calendarLoading ? (<><Loader2 className="mr-2 h-3 w-3 animate-spin" /> Connecting...</>) : (<><CalendarDays className="mr-2 h-3 w-3" /> Connect Google Calendar</>)}
+                  </Button>
+                )}
+              </div>
+
+              <Separator />
+
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold text-foreground">LinkedIn Integration</h3>
+                <p className="text-xs text-muted-foreground">
+                  Connect your LinkedIn profile to post job openings directly from Job Postings. Posts are published
+                  from your personal profile. Tokens are stored on the server and never exposed here.
+                </p>
+                {linkedinStatus.connected ? (
+                  <div className="flex items-center justify-between rounded-lg border border-success/20 bg-success-bg p-3">
+                    <div className="flex items-center gap-2">
+                      <Linkedin className="h-4 w-4 text-success-text" />
+                      <div>
+                        <div className="text-sm text-success-text">
+                          Connected{linkedinStatus.member_name ? ` as ${linkedinStatus.member_name}` : ""}
+                          {linkedinStatus.member_email ? ` (${linkedinStatus.member_email})` : ""}
+                        </div>
+                        {linkedinStatus.member_author_urn && (
+                          <div className="text-xs text-success-text/70">{linkedinStatus.member_author_urn}</div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Button type="button" variant="ghost" size="sm" onClick={refreshLinkedinStatus} title="Refresh status">
+                        <RefreshCw className="h-3 w-3" />
+                      </Button>
+                      <Button type="button" variant="ghost" size="sm" onClick={handleLinkedinDisconnect} disabled={linkedinLoading} className="text-destructive hover:text-destructive hover:bg-destructive/10">
+                        <Unlink className="h-3 w-3 mr-1" /> Disconnect
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <Button type="button" variant="outline" onClick={handleLinkedinConnect} disabled={linkedinLoading}>
+                    {linkedinLoading ? (<><Loader2 className="mr-2 h-3 w-3 animate-spin" /> Starting...</>) : (<><Linkedin className="mr-2 h-3 w-3" /> Connect LinkedIn</>)}
                   </Button>
                 )}
               </div>

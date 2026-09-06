@@ -1,63 +1,219 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { api } from "@/lib/api"
+import { connectCandidateLive } from "@/lib/live"
 import { runLocalScan } from "@/lib/integrity"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { TimerRing } from "@/components/timer-ring"
-import { Video, Send, ChevronRight } from "lucide-react"
-
-const QUESTIONS = [
-  "Tell me about a challenging project you worked on and how you handled it.",
-  "Describe a time when you had to learn a new technology quickly.",
-  "How do you approach debugging a complex issue?",
-  "Explain a technical concept to a non-technical person.",
-  "What would you do if you disagreed with a technical decision made by your team?",
-]
-
-const CATEGORIES = ["behavioral", "technical", "dsa", "system_design", "communication"]
+import { Video, Send, ChevronRight, Mic, MicOff, RotateCcw, Loader2, Wifi, WifiOff } from "lucide-react"
+import type { QuestionItem, LiveServerMessage } from "@/lib/types"
 
 const INTEGRITY_POLL_MS = 30000
 const LIVE_FRAME_INTERVAL_MS = 1500
+const PROGRESS_KEY = "candidate_question_progress"
+
+type RecState = "idle" | "recording" | "uploading" | "transcribing" | "transcript_ready" | "error"
+type LoadState = "loading" | "ready" | "error"
 
 export default function CandidateInterviewPage() {
   const router = useRouter()
   const videoRef = useRef<HTMLVideoElement>(null)
-  const recorderRef = useRef<MediaRecorder | null>(null)
-  const chunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const reportedFlagsRef = useRef<Set<string>>(new Set())
   const frameTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const chunksRef = useRef<Blob[]>([])
+  const liveWsRef = useRef<WebSocket | null>(null)
+  const answeredRef = useRef(false)
+  const liveConnectedRef = useRef(false)
 
   const [sessionStarted, setSessionStarted] = useState(false)
+  const [questions, setQuestions] = useState<QuestionItem[]>([])
+  const [loadState, setLoadState] = useState<LoadState>("loading")
   const [currentQuestion, setCurrentQuestion] = useState(0)
   const [timeLeft, setTimeLeft] = useState(300)
-  const [recording, setRecording] = useState(false)
+  const [recState, setRecState] = useState<RecState>("idle")
   const [transcript, setTranscript] = useState("")
+  const [typedAnswer, setTypedAnswer] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [cameraActive, setCameraActive] = useState(false)
+  const [errorMsg, setErrorMsg] = useState("")
+  const [liveConnected, setLiveConnected] = useState(false)
+  const [liveRecruiterOnline, setLiveRecruiterOnline] = useState(false)
 
   const candidate = typeof window !== "undefined" ? JSON.parse(sessionStorage.getItem("candidate") || "null") : null
   const job = typeof window !== "undefined" ? JSON.parse(sessionStorage.getItem("candidate_job") || "null") : null
-  const sessionId = typeof window !== "undefined" ? sessionStorage.getItem("session_id") : null
   const interviewToken = typeof window !== "undefined" ? sessionStorage.getItem("interview_token") || "" : ""
+  const sessionId = typeof window !== "undefined" ? sessionStorage.getItem("session_id") : null
+
+  const currentItem = questions[currentQuestion]
+  // question_id (and category) now come from the locked backend question set.
+  const questionId = currentItem?.question_id ?? ""
+  const category = currentItem?.category ?? "Technical Knowledge"
+  const canSubmit = (transcript.trim() || typedAnswer.trim()) && !submitting && recState !== "recording" && recState !== "uploading" && recState !== "transcribing"
+
+  const questionsRef = useRef<QuestionItem[]>([])
+  useEffect(() => { questionsRef.current = questions }, [questions])
+
+  // Server-authoritative position recovery (Phase 3B). The current question is
+  // the first locked question without a competency score — derived from the
+  // backend, not from browser sessionStorage — so a refresh / reconnect always
+  // restores the true position. sessionStorage is kept only as a coarse cache.
+  const applyServerProgress = useCallback((id: string | null | undefined) => {
+    if (id) {
+      const idx = questionsRef.current.findIndex((q) => q.question_id === id)
+      if (idx >= 0) {
+        setCurrentQuestion(idx)
+        setTimeLeft(300)
+        setRecState("idle")
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem(PROGRESS_KEY, String(idx))
+        }
+        return
+      }
+    }
+    // No server current question: fall back to first unanswered in the loaded
+    // set, then to the stored index, then question 0.
+    let idx = 0
+    if (typeof window !== "undefined") {
+      const saved = window.sessionStorage.getItem(PROGRESS_KEY)
+      const stored = saved !== null ? parseInt(saved, 10) : NaN
+      if (Number.isFinite(stored) && stored > 0) idx = stored
+    }
+    setCurrentQuestion(idx)
+    setTimeLeft(300)
+  }, [])
+
+  const restoreProgress = useCallback(() => {
+    if (typeof window === "undefined") return
+    applyServerProgress(null)
+  }, [applyServerProgress])
+
+  // Live connection to the shared interview session. The server authenticates
+  // this candidate from the interview token and routes recruiter events here.
+  const connectLive = useCallback(() => {
+    if (!sessionId) return () => {}
+    let disposed = false
+    connectCandidateLive(
+      { interviewToken, sessionId },
+      {
+        onOpen: () => {
+          if (!disposed) {
+            setLiveConnected(true)
+            liveConnectedRef.current = true
+          }
+        },
+        onClose: () => {
+          setLiveConnected(false)
+          liveConnectedRef.current = false
+        },
+        onMessage: (msg: LiveServerMessage) => {
+          switch (msg.type) {
+            case "joined": {
+              setLiveConnected(true)
+              setLiveRecruiterOnline((msg.connections?.recruiter ?? 0) > 0)
+              if (msg.current_question) {
+                const idx = questionsRef.current.findIndex(
+                  (q) => q.question_id === msg.current_question?.question_id
+                )
+                if (idx >= 0) {
+                  setCurrentQuestion(idx)
+                  setTimeLeft(300)
+                  setRecState("idle")
+                }
+              }
+              break
+            }
+            case "question_asked": {
+              // Recruiter asked a question -> jump straight to it.
+              const idx = questionsRef.current.findIndex(
+                (q) => q.question_id === msg.question?.question_id
+              )
+              if (idx >= 0) {
+                setCurrentQuestion(idx)
+                answeredRef.current = false
+                setTimeLeft(300)
+                setRecState("idle")
+                setTranscript("")
+                setTypedAnswer("")
+              }
+              break
+            }
+            case "connection_status": {
+              setLiveRecruiterOnline((msg.recruiter ?? 0) > 0)
+              break
+            }
+            case "interview_ended": {
+              toast.info("The interviewer has ended this interview.")
+              setLiveConnected(false)
+              liveConnectedRef.current = false
+              break
+            }
+            default:
+              break
+          }
+        },
+      }
+    ).then((ws) => {
+      liveWsRef.current = ws
+      if (disposed) ws.close()
+    })
+    return () => {
+      disposed = true
+      liveWsRef.current?.close()
+      liveWsRef.current = null
+    }
+  }, [sessionId, interviewToken])
 
   useEffect(() => {
     if (!candidate || !job || !sessionId) {
       router.push("/candidate/entry")
       return
     }
+    const disconnectLive = connectLive()
     async function init() {
       try {
         await api.startCandidateSession(sessionId!, candidate.candidate_id, job.job_id, interviewToken)
-        setSessionStarted(true)
       } catch {
         toast.error("Failed to start session")
       }
+
+      // Load the locked question set from the backend.
+      try {
+        const res = await api.getCandidateQuestions()
+        setQuestions(res.questions)
+        questionsRef.current = res.questions
+        setLoadState("ready")
+      } catch (err: any) {
+        setLoadState("error")
+        setErrorMsg(
+          (err?.message ?? "").includes("404")
+            ? "No questions have been prepared for this interview yet. Please wait for the recruiter."
+            : "Failed to load interview questions. Please try again."
+        )
+      }
+
+      // Server-authoritative recovery: jump straight to the first unanswered
+      // question (or the finish page if the interview already completed).
+      if (sessionId) {
+        try {
+          const prog = await api.getCandidateProgress()
+          if (prog.completed || prog.interview_status === "completed") {
+            streamRef.current?.getTracks().forEach((t) => t.stop())
+            router.push("/candidate/done")
+            return
+          }
+          applyServerProgress(prog.current_question?.question_id)
+        } catch {
+          restoreProgress()
+        }
+      }
+
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
         streamRef.current = stream
@@ -65,11 +221,10 @@ export default function CandidateInterviewPage() {
           videoRef.current.srcObject = stream
           setCameraActive(true)
         }
-        startRecording(stream)
-        setRecording(true)
       } catch {
         setCameraActive(false)
       }
+
       pollRef.current = setInterval(() => {
         pollIntegrityOnce(sessionId!).catch(() => {})
       }, INTEGRITY_POLL_MS)
@@ -80,8 +235,12 @@ export default function CandidateInterviewPage() {
     }
     init()
     return () => {
+      disconnectLive()
       if (pollRef.current) clearInterval(pollRef.current)
       if (frameTimerRef.current) clearInterval(frameTimerRef.current)
+      if (recorderRef.current && recorderRef.current.state !== "inactive") {
+        recorderRef.current.stop()
+      }
     }
   }, [])
 
@@ -123,83 +282,126 @@ export default function CandidateInterviewPage() {
   }
 
   useEffect(() => {
-    if (!recording || timeLeft <= 0) return
+    if (recState !== "recording" || timeLeft <= 0) return
     const timer = setInterval(() => {
       setTimeLeft((t) => {
         if (t <= 1) {
-          handleSubmit()
+          handleStopRecording()
           return 0
         }
         return t - 1
       })
     }, 1000)
     return () => clearInterval(timer)
-  }, [recording, currentQuestion])
+  }, [recState, currentQuestion])
 
-  function startRecording(stream: MediaStream) {
+  function startQuestionRecording() {
+    if (!streamRef.current) {
+      setErrorMsg("Microphone not available. Please type your answer.")
+      return
+    }
     try {
-      if (typeof MediaRecorder === "undefined") return
-      const mimeCandidates = ["video/webm;codecs=vp8,opus", "video/webm", "audio/webm"]
+      if (typeof MediaRecorder === "undefined") {
+        setErrorMsg("Recording not supported in this browser. Please type your answer.")
+        return
+      }
+      const mimeCandidates = ["audio/webm;codecs=opus", "audio/webm", "video/webm;codecs=vp8,opus", "video/webm"]
       const mimeType = mimeCandidates.find((m) => MediaRecorder.isTypeSupported(m))
-      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+      const recorder = new MediaRecorder(streamRef.current, mimeType ? { mimeType } : undefined)
       chunksRef.current = []
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data)
       }
-      recorder.start(5000)
+      recorder.start(1000)
       recorderRef.current = recorder
+      setRecState("recording")
+      setErrorMsg("")
+      if (liveWsRef.current?.readyState === WebSocket.OPEN) {
+        liveWsRef.current.send(JSON.stringify({ type: "answer_started" }))
+      }
     } catch {
+      setErrorMsg("Could not start recording. Please type your answer.")
     }
   }
 
-  function stopRecording(): Promise<Blob | null> {
-    return new Promise((resolve) => {
-      const recorder = recorderRef.current
-      if (!recorder || recorder.state === "inactive") {
-        resolve(null)
-        return
+  function handleStopRecording() {
+    const recorder = recorderRef.current
+    if (!recorder || recorder.state === "inactive") {
+      setRecState("idle")
+      return
+    }
+    recorder.onstop = () => {
+      const blob = chunksRef.current.length > 0
+        ? new Blob(chunksRef.current, { type: chunksRef.current[0].type })
+        : null
+      if (blob && sessionId && questionId) {
+        uploadAndTranscribe(blob)
+      } else {
+        setRecState("idle")
       }
-      recorder.onstop = () => {
-        const blob = chunksRef.current.length > 0 ? new Blob(chunksRef.current, { type: chunksRef.current[0].type }) : null
-        resolve(blob)
-      }
-      recorder.stop()
-    })
+    }
+    recorder.stop()
+    recorderRef.current = null
   }
 
-  async function uploadRecording() {
+  async function uploadAndTranscribe(audioBlob: Blob) {
+    if (!sessionId || !questionId) return
+    setRecState("uploading")
     try {
-      const blob = await stopRecording()
-      streamRef.current?.getTracks().forEach((t) => t.stop())
-      if (!blob || !sessionId) return
-      const ext = blob.type.includes("webm") ? "webm" : "bin"
-      await api.uploadRecording(sessionId, { video: blob }, { video: `${sessionId}_capture.${ext}` })
-    } catch {
-      toast.error("Interview recording could not be uploaded")
+      setRecState("transcribing")
+      const result = await api.transcribeSession(sessionId, questionId, audioBlob)
+      setTranscript(result.transcript)
+      setRecState("transcript_ready")
+      // Notify the live interviewer that this answer's transcript is ready.
+      if (liveWsRef.current?.readyState === WebSocket.OPEN) {
+        liveWsRef.current.send(JSON.stringify({ type: "answer_completed" }))
+      }
+    } catch (err: any) {
+      const msg = err?.message || "Transcription failed"
+      if (msg.includes("422")) {
+        setErrorMsg("Transcription was empty. Please try recording again.")
+      } else if (msg.includes("500")) {
+        setErrorMsg("Transcription service error. Please try again.")
+      } else {
+        setErrorMsg("Transcription failed. Please try again.")
+      }
+      setRecState("error")
     }
   }
 
   async function handleSubmit() {
-    if (!sessionId || submitting) return
+    if (!sessionId || !questionId || submitting) return
     setSubmitting(true)
     try {
-      if (transcript.trim()) {
+      const answerText = transcript.trim() || typedAnswer.trim()
+      if (answerText) {
         await api.submitAnswer(
           sessionId,
-          `q${currentQuestion + 1}`,
-          CATEGORIES[currentQuestion % CATEGORIES.length],
-          transcript
+          questionId,
+          category,
+          answerText
         )
       }
       setTranscript("")
-      if (currentQuestion < QUESTIONS.length - 1) {
-        setCurrentQuestion((q) => q + 1)
+      setTypedAnswer("")
+      setRecState("idle")
+      setErrorMsg("")
+
+      const next = currentQuestion + 1
+      if (next < questions.length) {
+        setCurrentQuestion(next)
         setTimeLeft(300)
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem(PROGRESS_KEY, String(next))
+        }
       } else {
         if (frameTimerRef.current) clearInterval(frameTimerRef.current)
         frameTimerRef.current = null
+        streamRef.current?.getTracks().forEach((t) => t.stop())
+        if (typeof window !== "undefined") {
+          window.sessionStorage.removeItem(PROGRESS_KEY)
+        }
         await api.completeCandidateSession(sessionId)
-        await uploadRecording()
         router.push("/candidate/done")
       }
     } catch (err) {
@@ -211,6 +413,24 @@ export default function CandidateInterviewPage() {
 
   if (!candidate || !job) return null
 
+  if (loadState === "loading") {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="text-sm text-muted-foreground">Loading your interview questions...</p>
+      </div>
+    )
+  }
+
+  if (loadState === "error") {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background p-6">
+        <p className="text-center text-sm text-destructive">{errorMsg}</p>
+        <Button variant="outline" onClick={() => router.back()}>Go Back</Button>
+      </div>
+    )
+  }
+
   return (
     <div className="-mx-4 min-h-screen bg-background p-4 md:-mx-8 md:p-8">
       <div className="mx-auto max-w-4xl space-y-6">
@@ -218,15 +438,28 @@ export default function CandidateInterviewPage() {
           <div>
             <h1 className="text-lg font-bold text-foreground">{job.title}</h1>
             <p className="text-sm leading-relaxed text-muted-foreground">
-              Question {currentQuestion + 1} of {QUESTIONS.length}
+              Question {currentQuestion + 1} of {questions.length}
             </p>
           </div>
           <div className="flex items-center gap-3">
-            {recording && (
+            <div className="flex items-center gap-1.5 rounded-full border border-input px-2.5 py-1 text-xs text-muted-foreground">
+              {liveConnected
+                ? liveRecruiterOnline
+                  ? <><Wifi className="h-3 w-3 text-success" /><span>Interviewer online</span></>
+                  : <><span className="h-2 w-2 rounded-full bg-warning" /><span>Waiting for interviewer</span></>
+                : <><WifiOff className="h-3 w-3 text-destructive" /><span>Offline</span></>}
+            </div>
+            {recState === "recording" && (
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 animate-pulse rounded-full bg-destructive" />
                 <span className="text-xs text-muted-foreground">Recording</span>
               </div>
+            )}
+            {recState === "uploading" && (
+              <span className="text-xs text-muted-foreground">Uploading...</span>
+            )}
+            {recState === "transcribing" && (
+              <span className="text-xs text-muted-foreground">Transcribing...</span>
             )}
           </div>
         </div>
@@ -250,8 +483,16 @@ export default function CandidateInterviewPage() {
 
         <Card className="rounded-2xl shadow-sm">
           <CardContent className="p-8">
+            <div className="mb-3 flex items-center gap-2">
+              <span className="rounded-full border border-input px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+                {currentItem?.category ?? "Interview"}
+              </span>
+              <span className="rounded-full border border-input px-2.5 py-0.5 text-xs font-medium text-muted-foreground capitalize">
+                {currentItem?.difficulty ?? "medium"}
+              </span>
+            </div>
             <p className="text-lg leading-relaxed text-foreground">
-              {QUESTIONS[currentQuestion]}
+              {currentItem?.question_text ?? ""}
             </p>
           </CardContent>
         </Card>
@@ -261,25 +502,117 @@ export default function CandidateInterviewPage() {
         </div>
 
         <Card className="rounded-2xl shadow-sm">
-          <CardContent className="p-6">
-            <textarea
-              className="h-40 w-full rounded-lg border border-input bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-primary focus:ring-2 focus:ring-ring/20"
-              placeholder="Type your answer here..."
-              value={transcript}
-              onChange={(e) => setTranscript(e.target.value)}
-            />
+          <CardContent className="space-y-4 p-6">
+            {recState === "idle" && !transcript && (
+              <div className="flex flex-col items-center gap-3 py-4">
+                <p className="text-sm text-muted-foreground">
+                  Click to start recording your answer, or type below.
+                </p>
+                <Button
+                  variant="outline"
+                  size="lg"
+                  onClick={startQuestionRecording}
+                  className="gap-2"
+                >
+                  <Mic className="h-5 w-5" />
+                  Start Recording
+                </Button>
+              </div>
+            )}
+
+            {recState === "recording" && (
+              <div className="flex flex-col items-center gap-3 py-4">
+                <div className="flex items-center gap-2">
+                  <span className="h-3 w-3 animate-pulse rounded-full bg-destructive" />
+                  <span className="text-sm font-medium text-foreground">Recording your answer...</span>
+                </div>
+                <Button
+                  variant="destructive"
+                  size="lg"
+                  onClick={handleStopRecording}
+                  className="gap-2"
+                >
+                  <MicOff className="h-5 w-5" />
+                  Stop Answer
+                </Button>
+              </div>
+            )}
+
+            {recState === "uploading" && (
+              <div className="flex flex-col items-center gap-2 py-4">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                <span className="text-sm text-muted-foreground">Uploading audio...</span>
+              </div>
+            )}
+
+            {recState === "transcribing" && (
+              <div className="flex flex-col items-center gap-2 py-4">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                <span className="text-sm text-muted-foreground">Transcribing your answer...</span>
+              </div>
+            )}
+
+            {(recState === "transcript_ready" || recState === "error") && transcript && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-muted-foreground">Transcript</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setTranscript("")
+                      setRecState("idle")
+                    }}
+                    className="gap-1 text-xs"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                    Re-record
+                  </Button>
+                </div>
+                <div className="rounded-lg border border-input bg-muted/50 p-4">
+                  <p className="text-sm leading-relaxed text-foreground">{transcript}</p>
+                </div>
+              </div>
+            )}
+
+            {recState === "error" && !transcript && (
+              <div className="space-y-3 py-2">
+                <p className="text-sm text-destructive">{errorMsg}</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setRecState("idle")
+                    setErrorMsg("")
+                  }}
+                  className="gap-1"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  Try Again
+                </Button>
+              </div>
+            )}
+
+            <div className="pt-2">
+              <textarea
+                className="h-28 w-full rounded-lg border border-input bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-primary focus:ring-2 focus:ring-ring/20"
+                placeholder="Type your answer here (or use recording above)..."
+                value={typedAnswer}
+                onChange={(e) => setTypedAnswer(e.target.value)}
+              />
+            </div>
           </CardContent>
         </Card>
 
         <div className="flex justify-end">
           <Button
             size="lg"
-            disabled={!transcript.trim() || submitting}
+            disabled={!canSubmit}
             onClick={handleSubmit}
           >
             {submitting ? (
               "Submitting..."
-            ) : currentQuestion < QUESTIONS.length - 1 ? (
+            ) : currentQuestion < questions.length - 1 ? (
               <>
                 Next Question <ChevronRight className="ml-2 h-4 w-4" />
               </>

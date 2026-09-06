@@ -1,0 +1,141 @@
+# Render deployment configuration for InterviewIQ
+# 
+# This file defines the services needed for production deployment:
+# 1. Web Service - FastAPI backend with workers disabled
+# 2. Background Worker - Separate process for screening/outbox/Gmail polling
+# 3. PostgreSQL Database - Managed database
+# 4. (Optional) Redis - For future distributed rate limiting
+
+services:
+  # ---------------------------------------------------------
+  # Web Service (FastAPI)
+  # ---------------------------------------------------------
+  - type: web
+    name: interviewiq-api
+    runtime: python
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+    startCommand: |
+      DEPLOY_MODE=remote INTERVIEWIQ_DISABLE_WORKERS=1 uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: interviewiq-db
+          property: connectionString
+      - key: DEPLOY_MODE
+        value: remote
+      - key: INTERVIEWIQ_DISABLE_WORKERS
+        value: "1"
+      - key: STORAGE_BACKEND
+        value: s3
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        value: us-east-1
+      - key: S3_ENDPOINT_URL
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: PUBLIC_APP_URL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: GMAIL_REDIRECT_URI
+        sync: false
+      - key: CALENDAR_REDIRECT_URI
+        sync: false
+      - key: LINKEDIN_REDIRECT_URI
+        sync: false
+      - key: LINKEDIN_CLIENT_ID
+        sync: false
+      - key: LINKEDIN_CLIENT_SECRET
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+    healthCheckPath: /health
+    autoDeploy: true
+    plan: starter  # Adjust based on needs
+
+  # ---------------------------------------------------------
+  # Background Worker Service
+  # ---------------------------------------------------------
+  - type: worker
+    name: interviewiq-workers
+    runtime: python
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+    startCommand: |
+      python -m app.workers
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: interviewiq-db
+          property: connectionString
+      - key: DEPLOY_MODE
+        value: remote
+      - key: INTERVIEWIQ_DISABLE_WORKERS
+        value: "0"
+      - key: STORAGE_BACKEND
+        value: s3
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        value: us-east-1
+      - key: S3_ENDPOINT_URL
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GMAIL_REDIRECT_URI
+        sync: false
+      - key: CALENDAR_REDIRECT_URI
+        sync: false
+      - key: LINKEDIN_REDIRECT_URI
+        sync: false
+      - key: LINKEDIN_CLIENT_ID
+        sync: false
+      - key: LINKEDIN_CLIENT_SECRET
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+    autoDeploy: true
+    plan: starter  # Adjust based on needs
+
+  # ---------------------------------------------------------
+  # PostgreSQL Database
+  # ---------------------------------------------------------
+databases:
+  - name: interviewiq-db
+    databaseName: interviewiq
+    user: interviewiq
+    plan: starter  # Adjust based on needs
+    # Note: Render will provide connectionString via DATABASE_URL env var
+
+# ---------------------------------------------------------
+# Optional: Redis for future distributed rate limiting
+# ---------------------------------------------------------
+# Uncomment when implementing distributed rate limiting
+# 
+# services:
+#   - type: redis
+#     name: interviewiq-redis
+#     plan: starter
+#     maxmemoryPolicy: allkeys-lru
+# 
+# Then add to web/worker envVars:
+#   - key: REDIS_URL
+#     fromService:
+#       name: interviewiq-redis
+#       type: redis
+#       property: connectionString

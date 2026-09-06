@@ -12,9 +12,11 @@ import json
 import logging
 from pathlib import Path
 
+from app.core.paths import get_client_secret_path
+
 logger = logging.getLogger(__name__)
 
-CLIENT_SECRET_PATH = Path(__file__).parent.parent.parent / "data" / "client_secret.json"
+CLIENT_SECRET_PATH = get_client_secret_path()
 
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 

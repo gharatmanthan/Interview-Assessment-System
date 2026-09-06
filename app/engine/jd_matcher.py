@@ -70,7 +70,7 @@ def _llm_match(resume_data: dict, job_description: str) -> dict:
         f"Resume experience (years): {resume_data.get('experience_years')}\n\n"
         f"Job description:\n{job_description}"
     )
-    raw = llm_client.ask_llm(system, user, json_mode=True)
+    raw = llm_client.ask_llm(system, user, json_mode=True, temperature=0.0)
     data = llm_client.parse_llm_json(raw)
 
     match_score = _clamp(data["match_score"], 0.0, 100.0, None)

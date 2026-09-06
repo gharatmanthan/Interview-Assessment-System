@@ -1,10 +1,10 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import * as path from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import * as http from 'http';
 import * as net from 'net';
 import * as fs from 'fs';
-import { loadConfig, needsSetup, saveConfig, AppConfig } from './config';
+import { loadConfig, needsSetup, saveConfig, AppConfig, getUserDataDir, getWhisperModelDir } from './config';
 import { runLocalScan } from './integrity';
 
 let mainWindow: BrowserWindow | null = null;
@@ -13,30 +13,78 @@ let frontendServer: http.Server | null = null;
 let startInFlight = false;
 
 const isDev = process.argv.includes('--dev');
-const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
-const STATIC_ROOT = path.join(PROJECT_ROOT, 'frontend', 'out');
-const MAX_POLL_ATTEMPTS = 30;
-const POLL_INTERVAL_MS = 500;
 
-/**
- * In a packaged app (extraResources) the Python sidecar lives under
- * process.resourcesPath (api/, app/, data/) rather than the repo layout
- * PROJECT_ROOT used in dev. Returning the resources dir here lets us point
- * cwd/PYTHONPATH and the static root at real, unpacked locations on disk.
- * In dev/from-source we fall back to the repository root.
- */
-function packagedRoot(): string {
-  return process.resourcesPath || PROJECT_ROOT;
+// ---------------------------------------------------------------------------
+// Path resolution — NEVER assume cwd. Two explicit layouts:
+//
+//   DEVELOPMENT (from-source, `npm run dev`):
+//     <repo>/
+//       electron/
+//       api/
+//       app/
+//       frontend/out/
+//       data/                 (writable dev data)
+//
+//   PACKAGED (electron-builder extraResources -> process.resourcesPath):
+//     <InstallDir>/resources/
+//       python/               (portable CPython + site-packages)
+//       backend/
+//         api/
+//         app/
+//       whisper/faster-whisper-base/
+//       frontend/out/
+//     AND app.getPath('userData')           (writable per-user data)
+// ---------------------------------------------------------------------------
+
+function resourcesRoot(): string {
+  return process.resourcesPath || '';
 }
 
 /**
- * True when the process is running from a packaged electron-builder bundle.
- * extraResources files are placed under resources/, not the repo layout.
+ * True when running from a packaged Electron bundle (NSIS/portable install).
+ *
+ * NOTE: gate on `app.isPackaged` — NEVER on `process.resourcesPath` alone.
+ * When running *unpackaged* from source (`electron .`), Electron still sets
+ * process.resourcesPath to `node_modules/electron/dist/resources`, so trusting
+ * mere truthiness would try to find python/backend under Electron's own runtime
+ * and fail with ENOENT. `app.isPackaged` is the reliable dev-vs-packaged flag.
  */
+function isPackagedApp(): boolean {
+  return !!app.isPackaged;
+}
+
+function backendRoot(): string {
+  // Packaged: resources/backend (has api/ + app/). Dev: repo root.
+  if (isPackagedApp()) {
+    return path.join(process.resourcesPath, 'backend');
+  }
+  return path.resolve(__dirname, '..', '..');
+}
+
+function staticRoot(): string {
+  if (isPackagedApp()) {
+    return path.join(process.resourcesPath, 'frontend', 'out');
+  }
+  return path.resolve(__dirname, '..', '..', 'frontend', 'out');
+}
+
+function pythonExecutable(): string {
+  // Packaged: resources/python/python.exe (self-contained). Dev: `python`
+  // from PATH (the developer's environment).
+  if (isPackagedApp()) {
+    return path.join(process.resourcesPath, 'python', 'python.exe');
+  }
+  return 'python';
+}
+
+/** True when running from a packaged bundle (resources present). */
 function isPackaged(): boolean {
-  return !!(process.resourcesPath
-    && fs.existsSync(path.join(process.resourcesPath, 'api', 'main.py')));
+  return isPackagedApp()
+    && fs.existsSync(path.join(process.resourcesPath, 'backend', 'api', 'main.py'));
 }
+
+const MAX_POLL_ATTEMPTS = 60;
+const POLL_INTERVAL_MS = 500;
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -84,10 +132,10 @@ function waitForServer(port: number): Promise<void> {
     const poll = () => {
       attempts++;
       if (attempts > MAX_POLL_ATTEMPTS) {
-        reject(new Error(`Server on port ${port} did not start within ${MAX_POLL_ATTEMPTS * POLL_INTERVAL_MS / 1000}s`));
+        reject(new Error(`Backend on port ${port} did not become ready within ${MAX_POLL_ATTEMPTS * POLL_INTERVAL_MS / 1000}s`));
         return;
       }
-      const req = http.get(`http://localhost:${port}/health`, (res: http.IncomingMessage) => {
+      const req = http.get(`http://127.0.0.1:${port}/health`, (res: http.IncomingMessage) => {
         if (res.statusCode === 200) {
           resolve();
         } else {
@@ -101,9 +149,13 @@ function waitForServer(port: number): Promise<void> {
   });
 }
 
+function showStartupError(message: string): void {
+  dialog.showErrorBox('InterviewIQ could not start', message);
+  console.error('Startup error:', message);
+}
+
 function killPythonProcess(): void {
-  if (pythonProcess && !pythonProcess.killed) {
-    // SIGTERM is unreliable on Windows; taskkill /T takes the whole child tree.
+  if (pythonProcess && !pythonProcess.killed && pythonProcess.pid) {
     if (process.platform === 'win32') {
       spawn('taskkill', ['/PID', String(pythonProcess.pid), '/T', '/F'], { windowsHide: true });
     } else {
@@ -114,17 +166,13 @@ function killPythonProcess(): void {
 }
 
 /**
- * Serve the exported (static) Next.js build over loopback HTTP.
- *
- * `loadFile(index.html)` breaks client-side routing — deep links like /jobs
- * or /reports fail because there is no server to apply the SPA fallback. This
- * serves ./frontend/out on a random 127.0.0.1 port with a MIME map and an
- * index.html fallback for anything that is not a real static asset, plus a
- * canonical `<base>`-independent location for fetch() relative to origin.
+ * Serve the exported (static) Next.js build over loopback HTTP with SPA
+ * fallback. All requests are contained within the static root (no `..`)
+ * so the renderer can deep-link /jobs, /reports, etc.
  */
 function serveFrontend(): Promise<string> {
   return new Promise((resolve, reject) => {
-    const root = path.resolve(STATIC_ROOT);
+    const root = path.resolve(staticRoot());
     const server = http.createServer((req, res) => {
       try {
         if (!req.url) {
@@ -133,7 +181,6 @@ function serveFrontend(): Promise<string> {
         }
         const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
         const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
-        // Keep any request inside the exported build — no escaping via ../
         const filePath = path.resolve(root, rel);
         if (filePath !== root && !filePath.startsWith(root + path.sep)) {
           res.writeHead(403).end('Forbidden');
@@ -147,7 +194,6 @@ function serveFrontend(): Promise<string> {
           res.end(data);
           return;
         }
-        // SPA fallback: unknown paths are client-side routes.
         const index = path.join(root, 'index.html');
         if (fs.existsSync(index)) {
           res.writeHead(200, { 'Content-Type': MIME_TYPES['.html'] });
@@ -175,14 +221,77 @@ function serveFrontend(): Promise<string> {
 }
 
 /**
- * Where should the frontend send shared-data requests?
- *
- * - local mode: the FastAPI sidecar spawned below, on a random loopback port
- *   (unchanged behavior — single-machine / on-site use)
- * - remote mode: no sidecar; everything goes to the central deployed server.
- *   Integrity scans still run LOCALLY via integrity.ts and their results are
- *   POSTed to this same base URL by the renderer.
+ * Spawn the FastAPI sidecar on a dynamic loopback port using the bundled
+ * Python runtime (packaged) or the developer's `python` (dev). Binds only to
+ * 127.0.0.1. Waits for /health before returning so the UI never loads a dead
+ * backend.
  */
+async function spawnBackend(port: number): Promise<void> {
+  const python = pythonExecutable();
+  const root = backendRoot();
+  const dataDir = getUserDataDir();
+  const whisperDir = getWhisperModelDir();
+
+  // Ensure the writable data dir exists before Python touches it.
+  fs.mkdirSync(dataDir, { recursive: true });
+
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PYTHONPATH: root,
+    PYTHONUTF8: '1',
+    INTERVIEWIQ_DATA_DIR: dataDir,
+  };
+  if (whisperDir) env['INTERVIEWIQ_WHISPER_MODEL_DIR'] = whisperDir;
+
+  console.log(`Starting Python backend: ${python}  port=${port}  cwd=${root}`);
+
+  // Use explicit pipes — NOT 'inherit'.
+  // In a packaged Windows GUI subsystem app, the parent has no console.
+  // stdio: 'inherit' gives the child (console-subsystem Python) invalid
+  // handles and it silently creates a hidden console, making every startup
+  // error invisible and preventing Electron from detecting /health.
+  pythonProcess = spawn(python, ['-m', 'api.main', '--port', String(port)], {
+    cwd: root,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  pythonProcess.stdout?.on('data', (d: Buffer) => {
+    const line = d.toString().trimEnd();
+    console.log(`[python:stdout] ${line}`);
+  });
+  pythonProcess.stderr?.on('data', (d: Buffer) => {
+    const line = d.toString().trimEnd();
+    console.error(`[python:stderr] ${line}`);
+  });
+
+  pythonProcess.on('error', (err: Error) => {
+    console.error('Failed to start Python sidecar:', err);
+    showStartupError(
+      `The bundled Python backend failed to start.\n\n${err.message}\n\n` +
+      `This usually means the InterviewIQ installation is incomplete. ` +
+      `Please reinstall the application.`,
+    );
+  });
+
+  pythonProcess.on('exit', (code: number | null) => {
+    console.log(`Python sidecar exited with code ${code}`);
+    pythonProcess = null;
+  });
+
+  try {
+    await waitForServer(port);
+  } catch (err) {
+    showStartupError(
+      `The InterviewIQ backend did not become ready in time.\n\n${(err as Error).message}\n\n` +
+      (isPackaged()
+        ? 'The installed application appears to be damaged. Please reinstall InterviewIQ.'
+        : 'For development, start the backend manually (python -m api.main) and try again.'),
+    );
+    throw err;
+  }
+}
+
 async function resolveApiBaseUrl(config: AppConfig): Promise<{ baseUrl: string; spawnedPort: number | null }> {
   if (config.backendMode === 'remote') {
     let url = config.remoteApiUrl.replace(/\/+$/, '');
@@ -191,33 +300,8 @@ async function resolveApiBaseUrl(config: AppConfig): Promise<{ baseUrl: string; 
   }
 
   const port = await getFreePort();
-  console.log(`Starting backend on port ${port}...`);
-
-  // In a packaged app the Python source is unpacked under resourcesPath (via
-  // extraResources). Point cwd + PYTHONPATH there so `python -m api.main`
-  // resolves api/ and app/ — app.asar is virtual and cannot be cwd.
-  const backendRoot = isPackaged() ? process.resourcesPath! : PROJECT_ROOT;
-
-  pythonProcess = spawn('python', ['-m', 'api.main', '--port', String(port)], {
-    cwd: backendRoot,
-    env: {
-      ...process.env,
-      PYTHONPATH: backendRoot,
-      INTERVIEWIQ_PACKAGED: isPackaged() ? '1' : '0',
-    },
-    stdio: 'inherit',
-  });
-
-  pythonProcess.on('error', (err: Error) => {
-    console.error('Failed to start Python process:', err);
-  });
-
-  pythonProcess.on('exit', (code: number | null) => {
-    console.log(`Python process exited with code ${code}`);
-    pythonProcess = null;
-  });
-
-  await waitForServer(port);
+  console.log(`Starting local backend on 127.0.0.1:${port} ...`);
+  await spawnBackend(port);
   console.log('Backend is ready');
   return { baseUrl: `http://127.0.0.1:${port}`, spawnedPort: port };
 }
@@ -230,8 +314,6 @@ function createWindow(baseUrl: string): BrowserWindow {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      // The renderer cannot read Node state directly (contextIsolation), so
-      // the resolved API base URL travels in through preload's process.argv.
       additionalArguments: [`--interviewiq-api-url=${baseUrl}`],
     },
   });
@@ -254,9 +336,6 @@ function registerIpc(): void {
     return { ...next, needsSetup: needsSetup(next) };
   });
   ipcMain.handle('integrity:local-scan', () => runLocalScan());
-  // Called after the setup screen / settings page changes backendMode or
-  // remoteApiUrl: the injected API base URL lives in preload's argv, so a
-  // fresh window (and sidecar decision) is required to apply it.
   ipcMain.handle('app:restart-window', async () => {
     killPythonProcess();
     await startApp();
@@ -264,9 +343,6 @@ function registerIpc(): void {
 }
 
 async function startApp(): Promise<void> {
-  // Guard against concurrent starts (whenReady + activate + restart-window can
-  // fire close together) which would otherwise spawn multiple Python sidecars
-  // and leak static servers on top of each other.
   if (startInFlight) {
     return;
   }
@@ -298,8 +374,6 @@ async function startApp(): Promise<void> {
   }
 }
 
-// Prevent a second app instance from spawning its own Python sidecar and
-// fighting over the same settings/data files.
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
   app.quit();

@@ -5,6 +5,7 @@ screens resumes, and auto-invites qualified candidates.
 Reuses the existing resume_parser.py + jd_matcher.py pipeline unchanged;
 this module only adds the Gmail layer around it.
 """
+import os
 import base64
 import logging
 from email.mime.text import MIMEText
@@ -17,6 +18,7 @@ from googleapiclient.discovery import build
 from app.core import db
 from app.core.models import ProcessedEmail
 from app.core.oauth_client import CLIENT_SECRET_PATH, load_oauth_credentials
+from app.core.paths import get_resumes_dir
 from app.core.settings_store import load_settings, save_settings
 
 logger = logging.getLogger(__name__)
@@ -27,7 +29,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.labels",
 ]
 
-RESUME_DIR = Path(__file__).parent.parent.parent / "data" / "resumes"
+RESUME_DIR = get_resumes_dir()
 
 
 def get_gmail_service():
@@ -56,7 +58,13 @@ def run_oauth_flow():
             "Download it from Google Cloud Console and place it in data/."
         )
     flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_PATH), SCOPES)
-    creds = flow.run_local_server(port=0)
+    # Use configured redirect URI if provided, otherwise let run_local_server pick a port
+    redirect_uri = os.environ.get("GMAIL_REDIRECT_URI", "").strip()
+    if redirect_uri:
+        flow.redirect_uri = redirect_uri
+        creds = flow.run_local_server(port=0)
+    else:
+        creds = flow.run_local_server(port=0)
     service = build("gmail", "v1", credentials=creds)
     profile = service.users().getProfile(userId="me").execute()
     email = profile["emailAddress"]
@@ -130,6 +138,104 @@ def compose_invite_email(candidate: dict, job: dict, invite_code: str,
             f"Best regards,\nInterviewIQ Automated Screening"
         )
 
+    return MIMEText(body)
+
+
+def compose_mode2_invite_email(candidate: dict, job: dict, invite_code: str,
+                               frontend_url: str = "") -> MIMEText:
+    """Compose a Mode 2 invite: an AI self-serve interview the candidate takes
+    at their convenience (no calendar slot; scheduling is only for Mode 1)."""
+    subject = f"Your self-serve interview \u2014 {job['title']}"
+
+    if frontend_url:
+        link = f"{frontend_url}/candidate/entry?code={invite_code}"
+        body = (
+            f"Dear {candidate['name']},\n\n"
+            f"Congratulations! You have advanced to the next stage for the {job['title']} position.\n\n"
+            f"You have been invited to complete a self-serve interview in our InterviewIQ system, "
+            f"where you will answer questions at your own pace. Your answers will be reviewed by our "
+            f"AI evaluator before the final round.\n\n"
+            f"Your interview invite code is: {invite_code}\n\n"
+            f"To begin your interview, click the link below and enter your code:\n"
+            f"{link}\n\n"
+            f"If the link doesn't work, you can also enter the code manually at the interview entry page.\n\n"
+            f"Best regards,\nInterviewIQ Automated Screening"
+        )
+    else:
+        body = (
+            f"Dear {candidate['name']},\n\n"
+            f"Congratulations! You have advanced to the next stage for the {job['title']} position.\n\n"
+            f"You have been invited to complete a self-serve interview in our InterviewIQ system, "
+            f"where you will answer questions at your own pace.\n\n"
+            f"Your interview invite code is: {invite_code}\n\n"
+            f"Download the InterviewIQ app and enter this code to begin your interview.\n\n"
+            f"Best regards,\nInterviewIQ Automated Screening"
+        )
+
+    return MIMEText(body)
+
+
+def compose_promotion_email(candidate: dict, job: dict, invite_code: str,
+                            frontend_url: str = "", scheduled_at=None) -> MIMEText:
+    """Compose a Mode 2 -> Mode 1 promotion invite (with the scheduled live
+    interview date when the calendar slot has been allocated)."""
+    subject = f"You've advanced to the final round \u2014 {job['title']}"
+
+    if scheduled_at is not None:
+        if getattr(scheduled_at, "tzinfo", None) is None:
+            from datetime import timezone
+            scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+        from datetime import datetime as _dt
+        try:
+            date_str = scheduled_at.astimezone().strftime("%A, %B %d, %Y at %I:%M %p")
+        except Exception:
+            date_str = str(scheduled_at)
+        schedule_line = (
+            f"\n\nYour final-round interview is scheduled for: {date_str}\n"
+            "Please be ready a few minutes beforehand with your webcam and microphone enabled."
+        )
+    else:
+        schedule_line = ""
+
+    if frontend_url:
+        link = f"{frontend_url}/candidate/entry?code={invite_code}"
+        body = (
+            f"Dear {candidate['name']},\n\n"
+            f"Fantastic news \u2014 your performance has earned you a place in the final round of "
+            f"the {job['title']} interview." + schedule_line + "\n\n"
+            f"Your final-round invite code is: {invite_code}\n\n"
+            f"To begin your interview, click the link below and enter your code:\n"
+            f"{link}\n\n"
+            f"If the link doesn't work, you can also enter the code manually at the interview entry page.\n\n"
+            f"Best regards,\nInterviewIQ Automated Screening"
+        )
+    else:
+        body = (
+            f"Dear {candidate['name']},\n\n"
+            f"Fantastic news \u2014 your performance has earned you a place in the final round of "
+            f"the {job['title']} interview." + schedule_line + "\n\n"
+            f"Your final-round invite code is: {invite_code}\n\n"
+            f"Download the InterviewIQ app and enter this code to begin your interview.\n\n"
+            f"Best regards,\nInterviewIQ Automated Screening"
+        )
+
+    return MIMEText(body)
+
+
+def compose_not_selected_email(candidate: dict, job: dict) -> MIMEText:
+    """Compose a not-selected email for candidates who completed Mode 2 but were
+    not promoted to the final (Mode 1) round. No reschedule, no booking."""
+    subject = f"Update on your application \u2014 {job['title']}"
+    body = (
+        f"Dear {candidate['name']},\n\n"
+        f"Thank you for completing the self-serve interview for the {job['title']} position at "
+        f"our company. We truly appreciate the time and effort you invested.\n\n"
+        f"After careful review of all candidates, we have decided not to move your application "
+        f"forward to the final round at this time. We encourage you to apply to future openings "
+        f"that match your profile.\n\n"
+        f"We wish you the very best in your job search.\n\n"
+        f"Best regards,\nInterviewIQ Automated Screening"
+    )
     return MIMEText(body)
 
 

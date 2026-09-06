@@ -13,13 +13,15 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, UploadFile, HTTPException
 
 from app.core import db
+from app.core.paths import get_resumes_dir
+from app.core.validation import is_valid_email, normalize_email
 from api.rate_limit import rate_limited
 from api.schemas import PublicJobResponse, PublicApplyResponse
 from app.screening.service import DuplicateApplicationError, create_application_and_queue
 
 router = APIRouter()
 
-RESUME_DIR = Path(__file__).parent.parent.parent / "data" / "resumes"
+RESUME_DIR = get_resumes_dir()
 
 ALLOWED_CONTENT_TYPES = {
     "application/pdf",
@@ -77,8 +79,8 @@ async def apply_for_job(
         raise HTTPException(status_code=400, detail="This position is no longer accepting applications.")
 
     name = (name or "").strip()
-    email = (email or "").strip().lower() if email else ""
-    if not name or not email or "@" not in email:
+    email = normalize_email(email)
+    if not name or not is_valid_email(email):
         raise HTTPException(status_code=422, detail="A valid name and email are required.")
 
     ext = _validate_resume_file(resume)
