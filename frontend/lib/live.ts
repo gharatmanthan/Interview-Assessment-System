@@ -15,12 +15,22 @@ import type {
  */
 
 const CONNECT_TIMEOUT_MS = 10000
+const RECONNECT_BASE_MS = 1000
+const RECONNECT_MAX_MS = 30000
+const RECONNECT_JITTER = 0.3
 
 export interface LiveConnectOptions {
   onOpen?: () => void
   onClose?: () => void
   onError?: (err?: unknown) => void
   onMessage: (msg: LiveServerMessage) => void
+  onReconnecting?: (attempt: number, delayMs: number) => void
+}
+
+export interface LiveConnection {
+  ws: WebSocket
+  close: () => void
+  reconnect: () => Promise<void>
 }
 
 /**
@@ -31,10 +41,10 @@ export interface LiveConnectOptions {
 export async function connectRecruiterLive(
   state: LiveRecruiterState,
   opts: LiveConnectOptions
-): Promise<WebSocket> {
+): Promise<LiveConnection> {
   const base = await getBaseUrl()
   const wsUrl = `${base.replace(/^http/, "ws")}/api/ws/interview/${encodeURIComponent(state.sessionId)}?token=${encodeURIComponent(state.token)}`
-  return _open(wsUrl, opts)
+  return _createConnection(wsUrl, opts)
 }
 
 /**
@@ -45,25 +55,61 @@ export async function connectRecruiterLive(
 export async function connectCandidateLive(
   state: LiveCandidateState,
   opts: LiveConnectOptions
-): Promise<WebSocket> {
+): Promise<LiveConnection> {
   const base = await getBaseUrl()
   const wsUrl = `${base.replace(/^http/, "ws")}/api/ws/interview/${encodeURIComponent(state.sessionId ?? "")}?token=${encodeURIComponent(state.interviewToken)}`
-  return _open(wsUrl, opts)
+  return _createConnection(wsUrl, opts)
 }
 
-function _open(wsUrl: string, opts: LiveConnectOptions): Promise<WebSocket> {
-  return new Promise<WebSocket>((resolve, reject) => {
-    const ws = new WebSocket(wsUrl)
-    let settled = false
+function _createConnection(wsUrl: string, opts: LiveConnectOptions): Promise<LiveConnection> {
+  return new Promise((resolve, reject) => {
+    let ws: WebSocket | null = null
+    let reconnectAttempt = 0
+    let isClosed = false
+    let isConnected = false
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
-    const timeout = setTimeout(() => {
-      if (settled) return
-      settled = true
-      ws.close()
-      const err = new Error("WebSocket connection timed out")
-      opts.onError?.(err)
-      reject(err)
-    }, CONNECT_TIMEOUT_MS)
+    const clearReconnectTimer = () => {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = null
+      }
+    }
+
+    const scheduleReconnect = () => {
+      if (isClosed) return
+      clearReconnectTimer()
+      const delay = Math.min(
+        RECONNECT_BASE_MS * Math.pow(2, reconnectAttempt) + Math.random() * RECONNECT_BASE_MS * RECONNECT_JITTER,
+        RECONNECT_MAX_MS
+      )
+      reconnectAttempt++
+      opts.onReconnecting?.(reconnectAttempt, delay)
+      reconnectTimer = setTimeout(() => {
+        if (!isClosed) {
+          _connect()
+        }
+      }, delay)
+    }
+
+    const _connect = () => {
+      if (isClosed) return
+      ws = new WebSocket(wsUrl)
+      let settled = false
+
+const timeout = setTimeout(() => {
+        if (settled) return
+        settled = true
+        ws?.close()
+        const err = new Error("WebSocket connection timed out")
+        if (!isConnected) {
+          opts.onError?.(err)
+          reject(err)
+        } else {
+          opts.onError?.(err)
+          scheduleReconnect()
+        }
+      }, CONNECT_TIMEOUT_MS)
 
     const settle = (fn: () => void) => {
       if (settled) return
@@ -74,41 +120,80 @@ function _open(wsUrl: string, opts: LiveConnectOptions): Promise<WebSocket> {
 
     ws.onopen = () => {
       settle(() => {
+        reconnectAttempt = 0
+        isConnected = true
         opts.onOpen?.()
-        resolve(ws)
+        if (conn) resolve(conn)
       })
     }
     ws.onclose = () => {
-      if (settled) {
+      if (isClosed) {
         opts.onClose?.()
         return
       }
-      // Unexpected close before the connection opened — reject so awaiting
-      // callers get an error instead of hanging indefinitely.
-      settle(() => {
-        opts.onError?.(new Error("WebSocket closed before opening"))
-        opts.onClose?.()
-        reject(new Error("WebSocket closed before opening"))
-      })
+      if (!isConnected) {
+        // Initial connection failed before open
+        settle(() => {
+          const err = new Error("WebSocket closed before opening")
+          opts.onError?.(err)
+          reject(err)
+        })
+        return
+      }
+      // Connected then closed - schedule reconnect
+      opts.onClose?.()
+      isConnected = false
+      scheduleReconnect()
     }
     ws.onerror = (e) => {
       if (settled) return
-      settle(() => {
+      if (!isConnected) {
+        // Initial connection error
+        settle(() => {
+          const err = new Error("WebSocket connection error")
+          opts.onError?.(err)
+          reject(err)
+        })
+      } else {
+        // Error after connection established
         opts.onError?.(e)
-        reject(new Error("WebSocket connection error"))
-      })
-    }
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        if (data && typeof data.type === "string") {
-          opts.onMessage(data as LiveServerMessage)
-        } else {
-          opts.onMessage({ type: "error", code: "unknown" } as LiveServerMessage)
-        }
-      } catch {
-        // Ignore non-JSON frames (e.g. ping).
       }
     }
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data && typeof data.type === "string") {
+            opts.onMessage(data as LiveServerMessage)
+          } else {
+            opts.onMessage({ type: "error", code: "unknown" } as LiveServerMessage)
+          }
+        } catch {
+          // Ignore non-JSON frames (e.g. ping).
+        }
+      }
+    }
+
+    let conn: LiveConnection | null = null
+    conn = {
+      get ws() {
+        if (!ws) throw new Error("WebSocket not initialized")
+        return ws
+      },
+      close: () => {
+        isClosed = true
+        clearReconnectTimer()
+        ws?.close()
+        ws = null
+      },
+      reconnect: async () => {
+        if (isClosed) return
+        clearReconnectTimer()
+        ws?.close()
+        reconnectAttempt = 0
+        isConnected = false
+        _connect()
+      },
+    }
+    _connect()
   })
 }

@@ -62,6 +62,7 @@ def init_db():
             _migrate_job_postings_empty_ids(conn)
             _migrate_candidates_unique_email_job(conn)
             _migrate_score_tables_unique(conn)
+            _migrate_integrity_flags_unique(conn)
             _migrate_linkedin_job_columns(conn)
             _migrate_linkedin_tables(conn)
             _migrate_question_transcripts(conn)
@@ -85,6 +86,7 @@ def init_db():
             _migrate_job_postings_empty_ids(conn)
             _migrate_candidates_unique_email_job(conn)
             _migrate_score_tables_unique(conn)
+            _migrate_integrity_flags_unique(conn)
             _migrate_linkedin_job_columns(conn)
             _migrate_linkedin_tables(conn)
             _migrate_question_transcripts(conn)
@@ -249,6 +251,25 @@ def _migrate_score_tables_unique(conn):
             f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table.rstrip('s')}_session_question "
             f"ON {table}(session_id, question_id)"
         )
+
+
+def _migrate_integrity_flags_unique(conn):
+    """Deduplicate integrity flags on (session_id, flag_type, detail) and add unique index.
+    
+    Server-side polling (run_checks every 5s) and client retries were producing
+    massive duplicate flags. This migration deduplicates existing rows and adds
+    a unique constraint so duplicates can never recur.
+    """
+    conn.execute(
+        """DELETE FROM integrity_flags WHERE id NOT IN (
+            SELECT MAX(id) FROM integrity_flags 
+            GROUP BY session_id, flag_type, detail
+        )"""
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_integrity_flag_session_type_detail "
+        "ON integrity_flags(session_id, flag_type, detail)"
+    )
 
 
 def _migrate_linkedin_job_columns(conn):
@@ -928,7 +949,10 @@ def save_integrity_flag(flag):
     d = asdict(flag)
     conn.execute(
         """INSERT INTO integrity_flags (session_id, flag_type, detail, severity, timestamp)
-        VALUES (:session_id, :flag_type, :detail, :severity, :timestamp)""",
+        VALUES (:session_id, :flag_type, :detail, :severity, :timestamp)
+        ON CONFLICT(session_id, flag_type, detail) DO UPDATE SET
+            severity = excluded.severity,
+            timestamp = excluded.timestamp""",
         {**d, "timestamp": str(d["timestamp"])},
     )
     conn.commit()

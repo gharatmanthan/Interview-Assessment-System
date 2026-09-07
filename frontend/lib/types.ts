@@ -355,6 +355,13 @@ export interface InviteValidation {
   expires_at?: string
 }
 
+export interface FaceCheckResponse {
+  faces: number
+  message: string
+  flag_type?: string
+  severity?: string
+}
+
 export interface GmailStatus {
   connected: boolean
   email: string

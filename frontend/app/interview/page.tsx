@@ -15,7 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { api, getBaseUrl, getAuthToken } from "@/lib/api"
-import { connectRecruiterLive } from "@/lib/live"
+import { connectRecruiterLive, LiveConnection } from "@/lib/live"
 import type { InterviewSession, IntegrityFlag, Candidate, QuestionItem, LiveServerMessage, InterviewStatusResponse } from "@/lib/types"
 import {
   Camera,
@@ -113,7 +113,7 @@ export default function InterviewPage() {
   const [numQuestions, setNumQuestions] = useState(10)
 
   // Phase 3A: MODE 1 live interview state.
-  const liveWsRef = useRef<WebSocket | null>(null)
+  const liveWsRef = useRef<LiveConnection | null>(null)
   const currentQuestionSet = useRef<Set<string>>(new Set())
   const preparedQuestionsRef = useRef<QuestionItem[]>([])
   const [liveConnected, setLiveConnected] = useState(false)
@@ -307,8 +307,8 @@ export default function InterviewPage() {
   // Phase 3A: MODE 1 shared live interview. The recruiter connects with their
   // Bearer token; server auth resolves the role and the owned session.
   const liveSend = (payload: Record<string, unknown>) => {
-    if (liveWsRef.current?.readyState === WebSocket.OPEN) {
-      liveWsRef.current.send(JSON.stringify(payload))
+    if (liveWsRef.current?.ws.readyState === WebSocket.OPEN) {
+      liveWsRef.current.ws.send(JSON.stringify(payload))
     }
   }
 
@@ -376,7 +376,7 @@ export default function InterviewPage() {
 
   // Ask the next prepared question that has not yet been asked.
   const handleAskNextQuestion = async () => {
-    if (!liveWsRef.current || liveWsRef.current.readyState !== WebSocket.OPEN) return
+    if (!liveWsRef.current || liveWsRef.current.ws.readyState !== WebSocket.OPEN) return
     const asked = currentQuestionSet.current
     setLiveAsking(true)
     try {
@@ -395,7 +395,7 @@ export default function InterviewPage() {
   }
 
   const handleEndLiveInterview = async () => {
-    if (!liveWsRef.current || liveWsRef.current.readyState !== WebSocket.OPEN) return
+    if (!liveWsRef.current || liveWsRef.current.ws.readyState !== WebSocket.OPEN) return
     toast("Ending live interview…")
     liveSend({ type: "end_interview" })
     setLiveConnected(false)

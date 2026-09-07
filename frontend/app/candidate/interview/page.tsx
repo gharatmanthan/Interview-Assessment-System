@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { api } from "@/lib/api"
 import { connectCandidateLive } from "@/lib/live"
+import type { LiveConnection } from "@/lib/live"
 import { runLocalScan } from "@/lib/integrity"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -14,7 +15,13 @@ import type { QuestionItem, LiveServerMessage } from "@/lib/types"
 
 const INTEGRITY_POLL_MS = 30000
 const LIVE_FRAME_INTERVAL_MS = 1500
+const FACE_CHECK_INTERVAL_MS = 15000
 const PROGRESS_KEY = "candidate_question_progress"
+
+// WebSocket reconnection constants
+const WS_RECONNECT_BASE_MS = 1000
+const WS_RECONNECT_MAX_MS = 30000
+const WS_RECONNECT_JITTER = 0.3
 
 type RecState = "idle" | "recording" | "uploading" | "transcribing" | "transcript_ready" | "error"
 type LoadState = "loading" | "ready" | "error"
@@ -26,11 +33,17 @@ export default function CandidateInterviewPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const reportedFlagsRef = useRef<Set<string>>(new Set())
   const frameTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const faceCheckTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
-  const liveWsRef = useRef<WebSocket | null>(null)
+  const liveWsRef = useRef<LiveConnection | null>(null)
   const answeredRef = useRef(false)
   const liveConnectedRef = useRef(false)
+  const faceCheckAbortRef = useRef<AbortController | null>(null)
+  const framePushAbortRef = useRef<AbortController | null>(null)
+  const wsReconnectAttemptRef = useRef(0)
+  const cameraDisconnectedRef = useRef(false)
+  const micDisconnectedRef = useRef(false)
 
   const [sessionStarted, setSessionStarted] = useState(false)
   const [questions, setQuestions] = useState<QuestionItem[]>([])
@@ -99,6 +112,8 @@ export default function CandidateInterviewPage() {
   const connectLive = useCallback(() => {
     if (!sessionId) return () => {}
     let disposed = false
+    let liveConn: LiveConnection | null = null
+    
     connectCandidateLive(
       { interviewToken, sessionId },
       {
@@ -112,7 +127,15 @@ export default function CandidateInterviewPage() {
           setLiveConnected(false)
           liveConnectedRef.current = false
         },
+        onError: (err) => {
+          console.warn("Live WS error:", err)
+        },
+        onReconnecting: (attempt, delay) => {
+          console.log(`Reconnecting to live server (attempt ${attempt}, delay ${Math.round(delay)}ms)`)
+          setErrorMsg(`Reconnecting... (attempt ${attempt})`)
+        },
         onMessage: (msg: LiveServerMessage) => {
+          setErrorMsg("") // Clear reconnecting message on successful message
           switch (msg.type) {
             case "joined": {
               setLiveConnected(true)
@@ -159,13 +182,15 @@ export default function CandidateInterviewPage() {
           }
         },
       }
-    ).then((ws) => {
-      liveWsRef.current = ws
-      if (disposed) ws.close()
+    ).then((conn) => {
+      liveConn = conn
+      liveWsRef.current = conn
+      if (disposed) conn.close()
     })
     return () => {
       disposed = true
-      liveWsRef.current?.close()
+      liveConn?.close()
+      liveConn = null
       liveWsRef.current = null
     }
   }, [sessionId, interviewToken])
@@ -217,6 +242,28 @@ export default function CandidateInterviewPage() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
         streamRef.current = stream
+        
+        // Detect camera/mic disconnect during interview
+        const videoTrack = stream.getVideoTracks()[0]
+        const audioTrack = stream.getAudioTracks()[0]
+        
+        if (videoTrack) {
+          videoTrack.addEventListener("ended", () => {
+            cameraDisconnectedRef.current = true
+            setCameraActive(false)
+            setErrorMsg("Camera disconnected. Please reconnect your camera.")
+            toast.warning("Camera disconnected")
+          })
+        }
+        
+        if (audioTrack) {
+          audioTrack.addEventListener("ended", () => {
+            micDisconnectedRef.current = true
+            setErrorMsg("Microphone disconnected. Please reconnect your microphone.")
+            toast.warning("Microphone disconnected")
+          })
+        }
+        
         if (videoRef.current) {
           videoRef.current.srcObject = stream
           setCameraActive(true)
@@ -232,12 +279,17 @@ export default function CandidateInterviewPage() {
       frameTimerRef.current = setInterval(() => {
         pushLiveFrame(sessionId!).catch(() => {})
       }, LIVE_FRAME_INTERVAL_MS)
+
+      faceCheckTimerRef.current = setInterval(() => {
+        runFaceCheck(sessionId!).catch(() => {})
+      }, FACE_CHECK_INTERVAL_MS)
     }
     init()
     return () => {
       disconnectLive()
       if (pollRef.current) clearInterval(pollRef.current)
       if (frameTimerRef.current) clearInterval(frameTimerRef.current)
+      if (faceCheckTimerRef.current) clearInterval(faceCheckTimerRef.current)
       if (recorderRef.current && recorderRef.current.state !== "inactive") {
         recorderRef.current.stop()
       }
@@ -247,6 +299,12 @@ export default function CandidateInterviewPage() {
   async function pushLiveFrame(sid: string) {
     const video = videoRef.current
     if (!video || video.readyState < 2 || !video.videoWidth) return
+    
+    // Cancel any in-flight frame push to prevent queue buildup
+    framePushAbortRef.current?.abort()
+    const controller = new AbortController()
+    framePushAbortRef.current = controller
+    
     const canvas = document.createElement("canvas")
     canvas.width = video.videoWidth
     canvas.height = video.videoHeight
@@ -254,7 +312,9 @@ export default function CandidateInterviewPage() {
     const blob = await new Promise<Blob | null>((resolve) =>
       canvas.toBlob(resolve, "image/jpeg", 0.6)
     )
-    if (blob) await api.uploadLiveFrame(sid, blob)
+    if (blob && !controller.signal.aborted) {
+      await api.uploadLiveFrame(sid, blob)
+    }
   }
 
   async function pollIntegrityOnce(sid: string) {
@@ -278,6 +338,43 @@ export default function CandidateInterviewPage() {
     if (fresh.length > 0) {
       fresh.forEach((f) => reportedFlagsRef.current.add(f.detail))
       await api.postIntegrityFlags(fresh)
+    }
+  }
+
+  async function runFaceCheck(sid: string) {
+    if (!videoRef.current || videoRef.current.readyState < 2 || !videoRef.current.videoWidth) return
+    
+    // Cancel any in-flight face check to prevent overlap
+    faceCheckAbortRef.current?.abort()
+    const controller = new AbortController()
+    faceCheckAbortRef.current = controller
+    
+    const canvas = document.createElement("canvas")
+    canvas.width = videoRef.current.videoWidth
+    canvas.height = videoRef.current.videoHeight
+    canvas.getContext("2d")?.drawImage(videoRef.current, 0, 0)
+    const frameBase64 = canvas.toDataURL("image/jpeg", 0.6).split(",")[1]
+    if (!frameBase64) return
+    try {
+      const res = await api.faceCheck(frameBase64, interviewToken)
+      if (controller.signal.aborted) return
+      
+      if (res.flag_type && res.severity) {
+        const detail = res.message
+        const key = `${res.flag_type}:${detail}`
+        if (!reportedFlagsRef.current.has(key)) {
+          reportedFlagsRef.current.add(key)
+          await api.postIntegrityFlags([{
+            session_id: sid,
+            flag_type: res.flag_type,
+            detail,
+            severity: res.severity,
+          }])
+        }
+      }
+    } catch (err: any) {
+      if (err.name === "AbortError") return
+      // Face check failed silently - don't interrupt interview
     }
   }
 
@@ -316,8 +413,8 @@ export default function CandidateInterviewPage() {
       recorderRef.current = recorder
       setRecState("recording")
       setErrorMsg("")
-      if (liveWsRef.current?.readyState === WebSocket.OPEN) {
-        liveWsRef.current.send(JSON.stringify({ type: "answer_started" }))
+      if (liveWsRef.current?.ws.readyState === WebSocket.OPEN) {
+        liveWsRef.current.ws.send(JSON.stringify({ type: "answer_started" }))
       }
     } catch {
       setErrorMsg("Could not start recording. Please type your answer.")
@@ -353,8 +450,8 @@ export default function CandidateInterviewPage() {
       setTranscript(result.transcript)
       setRecState("transcript_ready")
       // Notify the live interviewer that this answer's transcript is ready.
-      if (liveWsRef.current?.readyState === WebSocket.OPEN) {
-        liveWsRef.current.send(JSON.stringify({ type: "answer_completed" }))
+      if (liveWsRef.current?.ws.readyState === WebSocket.OPEN) {
+        liveWsRef.current.ws.send(JSON.stringify({ type: "answer_completed" }))
       }
     } catch (err: any) {
       const msg = err?.message || "Transcription failed"

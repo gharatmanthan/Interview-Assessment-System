@@ -663,3 +663,18 @@ class InterviewInviteResponse(BaseModel):
     created_at: Optional[str] = None
     expires_at: Optional[str] = None
     consumed_at: Optional[str] = None
+
+
+class FaceCheckRequest(BaseModel):
+    """Face detection check during interview. The candidate's Electron/renderer
+    captures a frame from the webcam and sends it for face-count verification.
+    """
+    frame_base64: str
+    interview_token: str = ""
+
+
+class FaceCheckResponse(BaseModel):
+    faces: int
+    message: str
+    flag_type: Optional[str] = None
+    severity: Optional[str] = None

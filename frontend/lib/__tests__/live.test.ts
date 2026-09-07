@@ -68,7 +68,7 @@ describe("connectRecruiterLive WebSocket error handling", () => {
 
     const onOpen = vi.fn()
     const onMessage = vi.fn()
-    const wsPromise = connectRecruiterLive(
+    const connPromise = connectRecruiterLive(
       { sessionId: "s1", token: "tok" },
       { onOpen, onMessage }
     )
@@ -78,8 +78,8 @@ describe("connectRecruiterLive WebSocket error handling", () => {
     expect(ws).toBeDefined()
     ws.onopen!()
 
-    const resolved = await wsPromise
-    expect(resolved).toBe(ws)
+    const conn = await connPromise
+    expect(conn.ws).toBe(ws)
     expect(onOpen).toHaveBeenCalledTimes(1)
     expect(ws.url).toContain("/api/ws/interview/s1")
   })
@@ -89,7 +89,7 @@ describe("connectRecruiterLive WebSocket error handling", () => {
     const { connectRecruiterLive } = await loadLive()
 
     const onError = vi.fn()
-    const wsPromise = connectRecruiterLive(
+    const connPromise = connectRecruiterLive(
       { sessionId: "s1", token: "tok" },
       { onError, onMessage: vi.fn() }
     )
@@ -97,7 +97,7 @@ describe("connectRecruiterLive WebSocket error handling", () => {
     await flush()
     FakeWebSocket.triggerError(lastInstance())
 
-    await expect(wsPromise).rejects.toThrow("WebSocket connection error")
+    await expect(connPromise).rejects.toThrow("WebSocket connection error")
     expect(onError).toHaveBeenCalledTimes(1)
   })
 
@@ -106,7 +106,7 @@ describe("connectRecruiterLive WebSocket error handling", () => {
     const { connectRecruiterLive } = await loadLive()
 
     const onError = vi.fn()
-    const wsPromise = connectRecruiterLive(
+    const connPromise = connectRecruiterLive(
       { sessionId: "s1", token: "tok" },
       { onError, onMessage: vi.fn() }
     )
@@ -114,7 +114,7 @@ describe("connectRecruiterLive WebSocket error handling", () => {
     await flush()
     FakeWebSocket.triggerClose(lastInstance())
 
-    await expect(wsPromise).rejects.toThrow("WebSocket closed before opening")
+    await expect(connPromise).rejects.toThrow("WebSocket closed before opening")
     expect(onError).toHaveBeenCalledTimes(1)
   })
 
@@ -124,13 +124,13 @@ describe("connectRecruiterLive WebSocket error handling", () => {
     const { connectRecruiterLive } = await loadLive()
 
     const onError = vi.fn()
-    const wsPromise = connectRecruiterLive(
+    const connPromise = connectRecruiterLive(
       { sessionId: "s1", token: "tok" },
       { onError, onMessage: vi.fn() }
     )
 
     await flush()
-    const rejection = expect(wsPromise).rejects.toThrow("timed out")
+    const rejection = expect(connPromise).rejects.toThrow("timed out")
     await vi.advanceTimersByTimeAsync(10001)
     await rejection
     expect(onError).toHaveBeenCalledTimes(1)

@@ -1,4 +1,4 @@
-import type { JobPosting, JobCreateInput, Candidate, InterviewSession, DashboardStats, CompetencyScore, Explanation, FairnessFlag, IntegrityFlag, CandidateReport, ComparisonRow, Settings, DeviceInfo, InviteValidation, GmailStatus, GmailConnectResult, EmailCheckResult, PollLogEntry, CalendarStatus, CalendarConnectResult, ScheduledInterview, ApplicationDetail, JobPipelineStat, LinkedInStatus, LinkedInConnectResult, LinkedInPreview, LinkedInPublishResult, TranscriptionResponse, QuestionItem, SelectQuestionsResponse, CandidateQuestionsResponse, CandidateProgressResponse, InterviewStatusResponse, JobStrategyStatus, JobStrategyConfirmInput } from './types'
+import type { JobPosting, JobCreateInput, Candidate, InterviewSession, DashboardStats, CompetencyScore, Explanation, FairnessFlag, IntegrityFlag, CandidateReport, ComparisonRow, Settings, DeviceInfo, InviteValidation, GmailStatus, GmailConnectResult, EmailCheckResult, PollLogEntry, CalendarStatus, CalendarConnectResult, ScheduledInterview, ApplicationDetail, JobPipelineStat, LinkedInStatus, LinkedInConnectResult, LinkedInPreview, LinkedInPublishResult, TranscriptionResponse, QuestionItem, SelectQuestionsResponse, CandidateQuestionsResponse, CandidateProgressResponse, InterviewStatusResponse, JobStrategyStatus, JobStrategyConfirmInput, FaceCheckResponse } from './types'
 
 let cachedBaseUrl: string | null = null
 
@@ -333,6 +333,10 @@ export const api = {
       method: 'POST', body: JSON.stringify({ session_id, interview_token: itoken }),
     })
   },
+  faceCheck: (frame_base64: string, interview_token: string) =>
+    request<FaceCheckResponse>('/api/candidate/face-check', {
+      method: 'POST', body: JSON.stringify({ frame_base64, interview_token }),
+    }),
 
   // Gmail Integration
   getGmailStatus: () => request<GmailStatus>('/api/settings/gmail/status'),

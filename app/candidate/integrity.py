@@ -58,27 +58,30 @@ def port_scan(timeout=0.3) -> list:
     return found
 
 
+# Cross-platform suspicious process patterns (lowercase, matched against process name)
 SUSPICIOUS_PROCESSES = {
-    # Remote desktop
-    "teamviewer.exe": "TeamViewer remote desktop detected",
-    "anydesk.exe": "AnyDesk remote desktop detected",
-    "ammyy.exe": "Ammyy Admin remote desktop detected",
-    "splashtop.exe": "Splashtop remote desktop detected",
-    "chrome_remote_desktop.exe": "Chrome Remote Desktop detected",
-    "parseconect": "Parallels Access detected",
+    # Remote desktop (cross-platform)
+    "teamviewer": "TeamViewer remote desktop detected",
+    "anydesk": "AnyDesk remote desktop detected",
+    "ammyy": "Ammyy Admin remote desktop detected",
+    "splashtop": "Splashtop remote desktop detected",
+    "chrome_remote_desktop": "Chrome Remote Desktop detected",
+    "parallels": "Parallels Access detected",
+    "rdp": "RDP client detected",
+    "vnc": "VNC client detected",
+    "tightvnc": "TightVNC detected",
+    "realvnc": "RealVNC detected",
     # Virtual machines
-    "vmware.exe": "VMware virtual machine detected",
-    "vmware-vmx.exe": "VMware VM process detected",
-    "virtualbox.exe": "VirtualBox detected",
-    "vboxsvc.exe": "VirtualBox service detected",
-    "qemu.exe": "QEMU virtual machine detected",
-    # Screen sharing
-    "vnc.exe": "VNC screen sharing detected",
-    "tightvnc.exe": "TightVNC detected",
-    "realvnc.exe": "RealVNC detected",
+    "vmware": "VMware virtual machine detected",
+    "vmware-vmx": "VMware VM process detected",
+    "virtualbox": "VirtualBox detected",
+    "vboxsvc": "VirtualBox service detected",
+    "qemu": "QEMU virtual machine detected",
     # Scripting/automation
-    "autohotkey.exe": "AutoHotkey automation detected",
+    "autohotkey": "AutoHotkey automation detected",
     "pyautogui": "PyAutoGUI automation detected",
+    "xautomation": "XAutomation detected",
+    "xdotool": "xdotool automation detected",
 }
 
 
@@ -283,13 +286,34 @@ def _format_device_event(devices: list) -> str:
     return "New external devices detected during interview: " + "; ".join(labels)
 
 
+# In-memory deduplication cache for server-side run_checks
+# Key: (session_id, flag_type, detail) -> timestamp
+_seen_integrity_flags: dict[tuple[str, str, str], float] = {}
+_SEEN_FLAG_TTL = 300  # 5 minutes
+
+
 def run_checks(session_id: str) -> list:
     """Combine all integrity signals into IntegrityFlag objects.
     Must return: list[IntegrityFlag] — this is what app/core/db.save_integrity_flag()
     and the Integrity Log page (Member C) expect.
+    
+    Deduplicates flags within a TTL window to prevent the 5s polling from
+    generating the same flags repeatedly.
     """
+    import time
+    now = time.time()
     flags = []
+    
+    # Clean expired entries
+    expired_keys = [k for k, ts in _seen_integrity_flags.items() if now - ts > _SEEN_FLAG_TTL]
+    for k in expired_keys:
+        del _seen_integrity_flags[k]
+    
     for port, tool in port_scan():
+        key = (session_id, "remote_access_port", f"{tool} port {port} is open")
+        if key in _seen_integrity_flags:
+            continue
+        _seen_integrity_flags[key] = now
         flags.append(
             IntegrityFlag(
                 session_id=session_id,
@@ -299,6 +323,10 @@ def run_checks(session_id: str) -> list:
             )
         )
     for finding in process_scan():
+        key = (session_id, finding["flag_type"], finding["detail"])
+        if key in _seen_integrity_flags:
+            continue
+        _seen_integrity_flags[key] = now
         flags.append(
             IntegrityFlag(
                 session_id=session_id,

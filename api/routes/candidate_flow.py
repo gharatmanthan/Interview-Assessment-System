@@ -1,7 +1,11 @@
 import logging
+import base64
 from datetime import datetime
+from io import BytesIO
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from PIL import Image
+import numpy as np
 
 from api.rate_limit import rate_limited
 from api.schemas import (
@@ -14,10 +18,13 @@ from api.schemas import (
     CandidateQuestionsResponse,
     CandidateProgressResponse,
     QuestionItem,
+    FaceCheckRequest,
+    FaceCheckResponse,
 )
 from app.core import db
 from app.core.models import InterviewSession
 from app.core.tokens import create_interview_token, verify_interview_token
+from app.candidate.face_recognition import verify_single_face
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -528,3 +535,86 @@ def get_candidate_interview_progress(
         current_question=p["current_question"],
         completed=p["completed"],
     )
+
+
+MAX_FACE_CHECK_FRAME_BYTES = 1 * 1024 * 1024  # 1MB limit for base64 JPEG
+
+@router.post("/candidate/face-check", response_model=FaceCheckResponse, dependencies=[Depends(rate_limited("face_check"))])
+def face_check(req: FaceCheckRequest):
+    """Verify face count in a webcam frame during interview.
+    
+    The candidate's renderer captures a frame from the webcam, encodes it as
+    base64 JPEG, and sends it here. We decode, run face detection, and return
+    the face count with a message. If 0 or >1 faces, the caller should report
+    an integrity flag via POST /api/integrity/flags.
+    """
+    if not req.frame_base64:
+        raise HTTPException(status_code=400, detail="Missing frame_base64")
+    
+    # Validate frame size before decoding (base64 is ~33% larger than binary)
+    if len(req.frame_base64) > MAX_FACE_CHECK_FRAME_BYTES * 4 // 3:
+        raise HTTPException(status_code=413, detail="Frame exceeds size limit")
+    
+    # Validate interview token first (same pattern as other candidate endpoints)
+    identity = verify_interview_token(req.interview_token)
+    if not identity:
+        raise HTTPException(status_code=401, detail="Invalid interview token.")
+    
+    candidate_id, job_id = identity
+    candidate = db.get_candidate(candidate_id)
+    if not candidate or candidate.get("job_id") != job_id:
+        raise HTTPException(status_code=401, detail="Invalid interview token.")
+    
+    # Decode base64 frame
+    try:
+        # Handle data URL prefix if present
+        frame_data = req.frame_base64
+        if frame_data.startswith("data:image"):
+            frame_data = frame_data.split(",", 1)[1]
+        img_bytes = base64.b64decode(frame_data)
+        img = Image.open(BytesIO(img_bytes))
+        
+        # Validate image dimensions (max 1920x1080)
+        max_dim = 1920
+        if img.width > max_dim or img.height > max_dim:
+            raise HTTPException(status_code=413, detail=f"Frame dimensions exceed {max_dim}px limit")
+        
+        # Convert to BGR numpy array for OpenCV
+        frame = np.array(img)
+        if frame.ndim == 3 and frame.shape[2] == 3:
+            frame = frame[:, :, ::-1]  # RGB -> BGR
+        elif frame.ndim == 2:
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        else:
+            raise ValueError("Unsupported image format")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("face_check: failed to decode frame: %s", e)
+        raise HTTPException(status_code=400, detail="Invalid frame data")
+    
+    # Run face detection
+    ok, message = verify_single_face(frame)
+    face_count = 1 if ok else (0 if "No face" in message else 2)
+    
+    # Determine flag type for integrity reporting
+    flag_type = None
+    severity = None
+    if not ok:
+        if face_count == 0:
+            flag_type = "no_face"
+            severity = "medium"
+        elif face_count > 1:
+            flag_type = "extra_person"
+            severity = "high"
+    
+    return FaceCheckResponse(
+        faces=face_count,
+        message=message,
+        flag_type=flag_type,
+        severity=severity,
+    )
+
+
+# Import cv2 at module level for face_check
+import cv2
