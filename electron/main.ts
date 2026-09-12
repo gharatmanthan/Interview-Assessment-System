@@ -182,18 +182,31 @@ function serveFrontend(): Promise<string> {
         const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
         const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
         const filePath = path.resolve(root, rel);
-        if (filePath !== root && !filePath.startsWith(root + path.sep)) {
-          res.writeHead(403).end('Forbidden');
-          return;
+
+        // Try exact match, then .html, then /index.html for static export compatibility
+        const candidates = [
+          filePath,
+          filePath + '.html',
+          path.join(filePath, 'index.html'),
+        ];
+
+        let served = false;
+        for (const candidate of candidates) {
+          if (candidate !== root && !candidate.startsWith(root + path.sep)) {
+            continue;
+          }
+          if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+            const data = fs.readFileSync(candidate);
+            res.writeHead(200, {
+              'Content-Type': MIME_TYPES[path.extname(candidate).toLowerCase()] || 'application/octet-stream',
+            });
+            res.end(data);
+            served = true;
+            break;
+          }
         }
-        if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-          const data = fs.readFileSync(filePath);
-          res.writeHead(200, {
-            'Content-Type': MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream',
-          });
-          res.end(data);
-          return;
-        }
+        if (served) return;
+
         const index = path.join(root, 'index.html');
         if (fs.existsSync(index)) {
           res.writeHead(200, { 'Content-Type': MIME_TYPES['.html'] });

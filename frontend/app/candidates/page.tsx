@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState, useRef, useCallback } from "react"
+import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { api } from "@/lib/api"
 import { isValidEmail } from "@/lib/email"
@@ -19,7 +20,7 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
-import { Copy, RefreshCw, Upload, Trash2, Loader2, Users, Mail, AlertTriangle, Info } from "lucide-react"
+import { Copy, RefreshCw, Upload, Trash2, Loader2, Users, Mail, AlertTriangle, Info, ChevronLeft } from "lucide-react"
 import { EmptyState } from "@/components/empty-state"
 
 const statusConfig: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" | "success" | "warning" }> = {
@@ -62,6 +63,7 @@ function promotionBadgeTone(status: string): string {
 }
 
 export default function CandidatesPage() {
+  const router = useRouter()
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [jobs, setJobs] = useState<JobPosting[]>([])
   const [loading, setLoading] = useState(true)
@@ -207,9 +209,20 @@ export default function CandidatesPage() {
     <div className="space-y-6 px-8 py-6">
       <div className="mx-auto max-w-6xl space-y-6">
         <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">Candidates</h1>
-            <p className="text-sm leading-relaxed text-muted-foreground">Manage interview candidates</p>
+          <div className="flex items-center gap-4">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => router.push("/dashboard")}
+              className="h-8"
+            >
+              <ChevronLeft className="h-4 w-4 mr-1.5" />
+              Back to Dashboard
+            </Button>
+            <div>
+              <h1 className="text-2xl font-bold text-foreground">Candidates</h1>
+              <p className="text-sm leading-relaxed text-muted-foreground">Manage interview candidates</p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             {jobsWithLabels.length > 0 ? (
