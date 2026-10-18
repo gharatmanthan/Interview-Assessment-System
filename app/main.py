@@ -3,7 +3,19 @@ AI-Powered Interview Assessment System
 Entry point for the desktop application.
 """
 import sys
+import os
 import argparse
+import traceback
+
+# Prevent OpenMP library collision aborts on Windows between OpenCV and faster-whisper
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+def _global_exception_hook(exctype, value, tb):
+    traceback.print_exception(exctype, value, tb)
+    sys.__excepthook__(exctype, value, tb)
+
+sys.excepthook = _global_exception_hook
+
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QFont
 

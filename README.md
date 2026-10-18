@@ -53,6 +53,61 @@ If no webcam is available it will show an error message but the rest of the app 
 
 The local demo candidate account is `candidate01` with password `interview123`.
 
+## Start the API locally
+
+The API is the first deployment layer for sharing live interview state between
+the candidate and interviewer applications. It currently uses the existing
+SQLite database, so it runs locally without cloud credentials. The database
+layer can later be replaced with a managed PostgreSQL connection without
+changing the HTTP contract.
+
+Install the API dependencies and start the service:
+
+```powershell
+pip install -r requirements.txt
+python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
+```
+
+The cloud container uses the smaller [`requirements-api.txt`](requirements-api.txt)
+file because it does not need desktop camera, audio, or Qt packages.
+
+Verify it from the host computer:
+
+```powershell
+curl http://127.0.0.1:8000/health
+```
+
+Interactive API documentation is available at `/docs`.
+
+## Deploy the API to Render
+
+The repository includes a `Dockerfile` and `render.yaml` for deploying the
+API as a Render web service. This is the first cloud deployment stage. The
+current service uses SQLite for compatibility with the desktop app; cloud
+SQLite storage is not durable on a disposable service, so PostgreSQL should be
+connected before using this for real interview records.
+
+1. Rotate any API key that was previously stored in `data/settings.json`.
+2. Push the repository to GitHub.
+3. In Render, choose **New > Blueprint**, select the repository, and apply
+   `render.yaml`.
+4. Set `CORS_ORIGINS` to the exact URL of the future frontend, or use `*`
+   temporarily for API-only testing.
+5. Set `GROQ_API_KEY` using a newly generated key in Render's environment
+   settings. Never commit it to the repository.
+6. After deployment, verify:
+
+```text
+https://YOUR-SERVICE.onrender.com/health
+https://YOUR-SERVICE.onrender.com/docs
+```
+
+The API base URL for future desktop/frontend clients will be:
+
+```text
+https://YOUR-SERVICE.onrender.com/api/v1
+```
+
 ## Architecture (planned modules)
 
 1. **Interview Engine** (`app/ui/pages/interview_page.py`) — question flow, webcam/mic capture ✅ MVP done

@@ -1,7 +1,10 @@
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QListWidget, QMessageBox, QPushButton, QTextEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout, QLabel, QListWidget, QMessageBox, QPushButton,
+    QTextEdit, QVBoxLayout, QWidget,
+)
 
 from app.core import db
 from app.reports.pdf_export import export_report
@@ -22,18 +25,41 @@ class ReportsPage(QWidget):
         layout.addWidget(title)
         layout.addWidget(subtitle)
 
+        body = QHBoxLayout()
+        body.setSpacing(16)
+
+        sessions_panel = QWidget()
+        sessions_panel.setObjectName("Card")
+        sessions_layout = QVBoxLayout(sessions_panel)
+        sessions_layout.setContentsMargins(16, 16, 16, 16)
+        sessions_heading = QLabel("Interview sessions")
+        sessions_heading.setStyleSheet("font-size: 14px; font-weight: 700; color: #344054;")
+        sessions_layout.addWidget(sessions_heading)
+
         self.sessions_list = QListWidget()
         self.sessions_list.currentRowChanged.connect(self._show_selected)
-        layout.addWidget(self.sessions_list)
+        self.sessions_list.setMinimumWidth(300)
+        sessions_layout.addWidget(self.sessions_list)
+        body.addWidget(sessions_panel, stretch=2)
 
+        report_panel = QWidget()
+        report_panel.setObjectName("Card")
+        report_layout = QVBoxLayout(report_panel)
+        report_layout.setContentsMargins(16, 16, 16, 16)
+        report_heading = QLabel("Assessment summary")
+        report_heading.setStyleSheet("font-size: 14px; font-weight: 700; color: #344054;")
+        report_layout.addWidget(report_heading)
         self.report_text = QTextEdit()
         self.report_text.setReadOnly(True)
-        layout.addWidget(self.report_text, stretch=1)
+        report_layout.addWidget(self.report_text, stretch=1)
 
-        export_button = QPushButton("Export Selected PDF")
+        export_button = QPushButton("Export selected PDF")
         export_button.setObjectName("PrimaryButton")
         export_button.clicked.connect(self._export_selected)
-        layout.addWidget(export_button)
+        report_layout.addWidget(export_button)
+        body.addWidget(report_panel, stretch=3)
+
+        layout.addLayout(body, stretch=1)
         self.refresh()
 
     def refresh(self):

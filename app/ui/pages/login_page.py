@@ -1,57 +1,109 @@
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QFormLayout, QGroupBox, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
 from app.core import db
 
 
-class CandidateLoginPage(QWidget):
+class RoleLoginPage(QWidget):
     authenticated = Signal(dict)
 
-    def __init__(self):
+    def __init__(self, role="candidate"):
         super().__init__()
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(120, 80, 120, 80)
-        layout.setSpacing(18)
+        self.role = role
+        self.setObjectName("LoginPage")
 
-        title = QLabel("Candidate Sign In")
-        title.setObjectName("PageTitle")
-        subtitle = QLabel("Sign in to access your interview dashboard")
-        subtitle.setObjectName("PageSubtitle")
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
+        root = QHBoxLayout(self)
+        root.setContentsMargins(80, 60, 80, 60)
+        root.setSpacing(80)
 
-        form_panel = QGroupBox("Candidate access")
-        form = QFormLayout(form_panel)
-        form.setContentsMargins(18, 22, 18, 18)
-        form.setVerticalSpacing(14)
-        self.candidate_id = QLineEdit()
-        self.candidate_id.setPlaceholderText("Enter your candidate ID")
+        brand = QVBoxLayout()
+        brand.setSpacing(12)
+        mark = QLabel("IQ")
+        mark.setObjectName("LoginMark")
+        brand.addWidget(mark)
+        title = QLabel("InterviewIQ")
+        title.setObjectName("LoginBrand")
+        brand.addWidget(title)
+        copy = QLabel("A clearer signal for every interview.\nStructured, explainable, and built for people.")
+        copy.setObjectName("LoginBrandCopy")
+        copy.setWordWrap(True)
+        brand.addWidget(copy)
+        brand.addStretch()
+        root.addLayout(brand, stretch=1)
+
+        panel = QWidget()
+        panel.setObjectName("LoginPanel")
+        panel.setMaximumWidth(440)
+        form = QVBoxLayout(panel)
+        form.setContentsMargins(36, 34, 36, 34)
+        form.setSpacing(14)
+
+        kicker = QLabel("SECURE WORKSPACE")
+        kicker.setObjectName("LoginKicker")
+        form.addWidget(kicker)
+        heading = QLabel("Sign in to continue")
+        heading.setObjectName("LoginTitle")
+        form.addWidget(heading)
+        description = QLabel("Access your interview workspace and pick up where you left off.")
+        description.setObjectName("LoginCopy")
+        description.setWordWrap(True)
+        form.addWidget(description)
+        form.addSpacing(8)
+
+        role_row = QHBoxLayout()
+        self.candidate_btn = QPushButton("Candidate")
+        self.interviewer_btn = QPushButton("Interviewer")
+        for button in (self.candidate_btn, self.interviewer_btn):
+            button.setCheckable(True)
+            button.setObjectName("RoleButton")
+            role_row.addWidget(button)
+        self.candidate_btn.clicked.connect(lambda: self._set_role("candidate"))
+        self.interviewer_btn.clicked.connect(lambda: self._set_role("interviewer"))
+        form.addLayout(role_row)
+
+        self.identity = QLineEdit()
+        self.identity.setPlaceholderText("Candidate ID" if role == "candidate" else "Interviewer ID")
         self.password = QLineEdit()
-        self.password.setPlaceholderText("Enter your password")
+        self.password.setPlaceholderText("Password")
         self.password.setEchoMode(QLineEdit.Password)
         self.password.returnPressed.connect(self._login)
-        form.addRow("Candidate ID", self.candidate_id)
-        form.addRow("Password", self.password)
-        layout.addWidget(form_panel)
+        form.addWidget(self.identity)
+        form.addWidget(self.password)
 
-        self.status = QLabel("Use the candidate credentials provided by your interviewer.")
-        self.status.setObjectName("PageSubtitle")
+        self.status = QLabel("Use the credentials provided by your organization.")
+        self.status.setObjectName("LoginStatus")
         self.status.setWordWrap(True)
-        layout.addWidget(self.status)
+        form.addWidget(self.status)
+        button = QPushButton("Enter workspace")
+        button.setObjectName("PrimaryButton")
+        button.setMinimumHeight(44)
+        button.clicked.connect(self._login)
+        form.addWidget(button)
+        form.addStretch()
+        root.addWidget(panel, stretch=1)
+        self._set_role(role)
 
-        login_button = QPushButton("Sign In")
-        login_button.setObjectName("PrimaryButton")
-        login_button.clicked.connect(self._login)
-        layout.addWidget(login_button)
-        layout.addStretch()
+    def _set_role(self, role):
+        self.role = role
+        self.candidate_btn.setChecked(role == "candidate")
+        self.interviewer_btn.setChecked(role == "interviewer")
+        self.identity.setPlaceholderText("Candidate ID" if role == "candidate" else "Interviewer ID")
+        self.status.setText("Candidate access is ready." if role == "candidate" else "Interviewer access is restricted to authorized staff.")
 
     def _login(self):
-        candidate_id = self.candidate_id.text().strip()
+        identity = self.identity.text().strip()
         password = self.password.text()
-        account = db.authenticate_candidate(candidate_id, password)
+        if self.role == "candidate":
+            account = db.authenticate_candidate(identity, password)
+        else:
+            account = {"full_name": "Interviewer", "interviewer_id": identity} if identity == "interviewer01" and password == "interview123" else None
         if account:
             self.authenticated.emit(account)
             return
-        self.status.setText("Invalid candidate ID or password.")
-        self.status.setStyleSheet("color: #EF4444; font-weight: 600;")
-        QMessageBox.warning(self, "Sign in failed", "Please check your candidate ID and password.")
+        self.status.setText("That ID and password do not match.")
+        self.status.setStyleSheet("color: #C2413A; font-weight: 700;")
+        QMessageBox.warning(self, "Sign in failed", "Please check your credentials and try again.")
+
+
+CandidateLoginPage = RoleLoginPage
+InterviewerLoginPage = RoleLoginPage

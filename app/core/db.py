@@ -94,7 +94,11 @@ def init_db():
         question_index INTEGER NOT NULL DEFAULT 0,
         transcript TEXT NOT NULL DEFAULT '',
         status TEXT NOT NULL DEFAULT 'live',
-        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        pending_question TEXT NOT NULL DEFAULT '',
+        pending_status TEXT NOT NULL DEFAULT 'none',
+        question_count INTEGER NOT NULL DEFAULT 0,
+        interview_context TEXT NOT NULL DEFAULT '[]'
     );
     """)
     conn.execute(
@@ -103,6 +107,34 @@ def init_db():
         VALUES (?, ?, ?)""",
         ("candidate01", "interview123", "Demo Candidate"),
     )
+    default_jobs = [
+        (
+            "Python Backend Developer",
+            "Build reliable REST APIs and backend services with Python. Work with FastAPI or Django, PostgreSQL, automated tests, Git, and cloud deployment. We are looking for strong problem-solving, clean coding, and API design skills.",
+        ),
+        (
+            "Frontend React Developer",
+            "Create accessible, responsive interfaces with React and modern JavaScript or TypeScript. Collaborate with designers and backend engineers, integrate APIs, write maintainable components, and improve user experience through thoughtful testing.",
+        ),
+    ]
+    for title, description in default_jobs:
+        conn.execute(
+            """INSERT INTO job_postings (title, description, created_at, is_active)
+            SELECT ?, ?, datetime('now'), 1
+            WHERE NOT EXISTS (SELECT 1 FROM job_postings WHERE title = ?)""",
+            (title, description, title),
+        )
+    conn.commit()
+    # Migrate existing databases that lack the new columns
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(live_interviews)").fetchall()}
+    for col, definition in [
+        ("pending_question",  "TEXT NOT NULL DEFAULT ''"),
+        ("pending_status",    "TEXT NOT NULL DEFAULT 'none'"),
+        ("question_count",    "INTEGER NOT NULL DEFAULT 0"),
+        ("interview_context", "TEXT NOT NULL DEFAULT '[]'"),
+    ]:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE live_interviews ADD COLUMN {col} {definition}")
     conn.commit()
     conn.close()
 
@@ -133,6 +165,22 @@ def authenticate_candidate(candidate_id, password):
     ).fetchone()
     conn.close()
     return dict(account) if account else None
+
+
+def create_candidate_account(candidate_id, password, full_name):
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO candidate_accounts (candidate_id, password, full_name)
+            VALUES (?, ?, ?)""",
+            (candidate_id, password, full_name),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+    return True
 
 
 def get_candidate_accounts():
@@ -239,7 +287,10 @@ def start_live_interview(session_id, candidate_id, candidate_name, question, que
 
 
 def update_live_interview(session_id, **fields):
-    allowed = {"question", "question_index", "transcript", "status"}
+    allowed = {
+        "question", "question_index", "transcript", "status",
+        "pending_question", "pending_status", "question_count", "interview_context",
+    }
     changes = {key: value for key, value in fields.items() if key in allowed}
     if not changes:
         return
@@ -252,6 +303,46 @@ def update_live_interview(session_id, **fields):
     )
     conn.commit()
     conn.close()
+
+
+def save_pending_question(session_id: str, question: str) -> None:
+    """Save an AI-generated question as pending interviewer approval."""
+    update_live_interview(session_id, pending_question=question, pending_status="pending")
+
+
+def approve_pending_question(session_id: str, question: str | None = None) -> None:
+    """Approve (and optionally overwrite) the pending question — makes it visible to the candidate."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT pending_question, question_index, question_count, interview_context, transcript FROM live_interviews WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return
+    approved_q = question if question is not None else row["pending_question"]
+    new_index = row["question_index"] + 1
+    new_count = row["question_count"] + 1
+    update_live_interview(
+        session_id,
+        question=approved_q,
+        question_index=new_index,
+        question_count=new_count,
+        transcript="",
+        pending_question="",
+        pending_status="approved",
+    )
+
+
+def get_pending_question(session_id: str) -> dict | None:
+    """Return the pending question info for a session, or None if not pending."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT pending_question, pending_status, question_count FROM live_interviews WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 def get_live_interviews():

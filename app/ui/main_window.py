@@ -2,23 +2,23 @@ from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QStackedWidget
 
 from app.ui.sidebar import Sidebar
 from app.ui.pages.candidate_dashboard import CandidateDashboard
+from app.ui.pages.candidates_page import CandidatesPage
 from app.ui.pages.interviewer_dashboard import InterviewerDashboard
 from app.ui.pages.job_posting_page import JobPostingPage
 from app.ui.pages.interview_page import InterviewPage
 from app.ui.pages.interviewer_interview_page import InterviewerInterviewPage
-from app.ui.pages.login_page import CandidateLoginPage
+from app.ui.pages.login_page import RoleLoginPage
 from app.ui.pages.placeholder_page import PlaceholderPage
 from app.ui.pages.reports_page import ReportsPage
 
 
 class MainWindow(QMainWindow):
-    # Added user_role parameter to determine which dashboard to load
     def __init__(self, user_role="candidate"):
         super().__init__()
         self.user_role = user_role
         from app.core import db
         db.init_db()
-        self.setWindowTitle("InterviewIQ — AI Interview Assessment System")
+        self.setWindowTitle("InterviewIQ - AI Interview Assessment System")
         self.resize(1360, 860)
         self.setMinimumSize(1040, 680)
 
@@ -32,15 +32,17 @@ class MainWindow(QMainWindow):
 
         self.stack = QStackedWidget()
 
-        # Conditionally load the appropriate dashboard widget
         if self.user_role == "interviewer":
             dashboard_page = InterviewerDashboard()
         else:
             dashboard_page = CandidateDashboard()
-            dashboard_page.start_interview_requested.connect(self._start_candidate_interview)
+            dashboard_page.interview_ready.connect(self._start_candidate_interview)
 
         self.pages = {
             "dashboard": dashboard_page,
+            "candidates": CandidatesPage() if self.user_role == "interviewer" else PlaceholderPage(
+                "Candidates", "Candidate accounts", "Candidate accounts are managed by interviewers."
+            ),
             "job_posting": JobPostingPage() if self.user_role == "interviewer" else PlaceholderPage(
                 "Job Postings", "Available interview opportunities", "Job postings are managed by interviewers."
             ),
@@ -80,30 +82,46 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.sidebar)
         layout.addWidget(self.stack, stretch=1)
 
-        if self.user_role == "candidate":
-            self.login_page = CandidateLoginPage()
-            self.login_page.authenticated.connect(self._show_candidate_app)
-            layout.insertWidget(0, self.login_page, stretch=1)
-            self.sidebar.hide()
-            self.stack.hide()
+        self.login_page = RoleLoginPage(self.user_role)
+        self.login_page.authenticated.connect(self._show_authenticated_app)
+        layout.insertWidget(0, self.login_page, stretch=1)
+        self.sidebar.hide()
+        self.stack.hide()
 
         self.setCentralWidget(central)
 
     def _show_candidate_app(self, account):
-        self.pages["dashboard"].set_candidate(account["candidate_id"])
-        self.pages["interview"].set_candidate(account["candidate_id"], account["full_name"])
+        name = account.get("full_name", "Candidate")
+        self.pages["dashboard"].set_candidate(account["candidate_id"], name)
+        self.pages["interview"].set_candidate(account["candidate_id"], name)
+        self.sidebar.set_user(name)
         self.sidebar.show()
         self.stack.show()
         self.login_page.hide()
-        self.setWindowTitle(f"InterviewIQ — {account['full_name']}")
+        self.setWindowTitle(f"InterviewIQ - {name}")
 
-    def _start_candidate_interview(self, job_id):
-        self.pages["interview"].set_job(job_id)
+    def _show_authenticated_app(self, account):
+        if self.user_role == "candidate":
+            self._show_candidate_app(account)
+            return
+        self.sidebar.set_user(account.get("full_name", "Interviewer"))
+        self.sidebar.show()
+        self.stack.show()
+        self.login_page.hide()
+        self.pages["dashboard"].set_navigate_callback(self._navigate)
+        self.setWindowTitle("InterviewIQ - Interviewer workspace")
+
+    def _start_candidate_interview(self, job_id: int, questions: list):
+        if hasattr(self.pages["dashboard"], "cleanup"):
+            self.pages["dashboard"].cleanup()
+        self.pages["interview"].set_job(job_id, questions if questions else None)
         self._navigate("interview")
 
     def _navigate(self, key):
         page = self.pages.get(key)
         if page:
+            if key == "reports" and hasattr(page, "refresh"):
+                page.refresh()
             self.stack.setCurrentWidget(page)
 
     def closeEvent(self, event):

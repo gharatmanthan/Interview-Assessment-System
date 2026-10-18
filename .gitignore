@@ -8,6 +8,8 @@ __pycache__/
 venv/
 env/
 .env
+.env.*
+!.env.example
 
 # JavaScript dependencies and build output
 node_modules/

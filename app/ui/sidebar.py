@@ -2,14 +2,21 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel, QSpacer
 from PySide6.QtCore import Signal, Qt
 
 
-NAV_ITEMS = [
-    ("dashboard", "🏠  Dashboard"),
-    ("job_posting", "📝  Create Job Posting"),
-    ("interview", "🎙  New Interview"),
-    ("reports", "📊  Candidate Reports"),
-    ("bias_audit", "⚖️  Bias Audit"),
-    ("integrity", "🛡  Integrity Log"),
-    ("settings", "⚙️  Settings"),
+INTERVIEWER_NAV_ITEMS = [
+    ("dashboard", "Dashboard"),
+    ("candidates", "Candidates"),
+    ("job_posting", "Job postings"),
+    ("interview", "Live monitor"),
+    ("reports", "Candidate reports"),
+    ("bias_audit", "Bias audit"),
+    ("integrity", "Integrity log"),
+    ("settings", "Settings"),
+]
+
+CANDIDATE_NAV_ITEMS = [
+    ("dashboard", "Dashboard"),
+    ("interview", "My interview"),
+    ("settings", "Settings"),
 ]
 
 
@@ -34,11 +41,15 @@ class Sidebar(QWidget):
         subtitle.setObjectName("BrandSubtitle")
         layout.addWidget(title)
         layout.addWidget(subtitle)
-        layout.addSpacing(28)
 
-        visible_items = NAV_ITEMS if user_role == "interviewer" else [
-            item for item in NAV_ITEMS if item[0] in {"dashboard", "interview", "settings"}
-        ]
+        # Role / User indicator
+        role_title = "Interviewer workspace" if user_role == "interviewer" else "Candidate workspace"
+        self.user_badge = QLabel(logged_in_as or role_title)
+        self.user_badge.setObjectName("RoleBadge")
+        layout.addWidget(self.user_badge)
+        layout.addSpacing(20)
+
+        visible_items = INTERVIEWER_NAV_ITEMS if user_role == "interviewer" else CANDIDATE_NAV_ITEMS
         for key, label in visible_items:
             btn = QPushButton(label)
             btn.setObjectName("NavButton")
@@ -49,11 +60,14 @@ class Sidebar(QWidget):
 
         layout.addSpacerItem(QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding))
 
-        footer = QLabel("Group Project · v0.1")
+        footer = QLabel("Interview assessment platform")
         footer.setObjectName("BrandSubtitle")
         layout.addWidget(footer)
 
         self._set_active("dashboard")
+
+    def set_user(self, name: str):
+        self.user_badge.setText(name)
 
     def _on_click(self, key):
         self._set_active(key)

@@ -52,6 +52,10 @@ def get_unauthorized_devices():
     try:
         ports = serial.tools.list_ports.comports()
         for port in ports:
+            description = (port.description or "").lower()
+            hwid = (port.hwid or "").lower()
+            if "bluetooth" in description or "bthenum" in hwid:
+                continue
             unauthorized_devices.append(f"Serial Device: {port.device} ({port.description})")
     except Exception as e:
         print(f"Error checking Serial ports: {e}")
