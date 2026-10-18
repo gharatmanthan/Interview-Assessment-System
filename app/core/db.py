@@ -26,40 +26,10 @@ def get_connection():
 def init_db():
     conn = get_connection()
     conn.executescript("""
-    CREATE TABLE IF NOT EXISTS recruiter_users (
-        username TEXT PRIMARY KEY,
-        password_hash TEXT,
-        full_name TEXT,
-        created_at TEXT
-    );
-    CREATE TABLE IF NOT EXISTS candidates (
-        candidate_id TEXT PRIMARY KEY,
-        job_id TEXT,
-        name TEXT,
-        email TEXT,
-        invite_code TEXT UNIQUE,
-        status TEXT,
-        session_id TEXT,
-        invited_at TEXT
-    );
-    CREATE TABLE IF NOT EXISTS job_postings (
-        job_id TEXT PRIMARY KEY,
-        title TEXT,
-        description TEXT,
-        required_skills TEXT,
-        experience_level TEXT,
-        department TEXT,
-        num_rounds INTEGER,
-        time_limit_seconds INTEGER,
-        adaptive_difficulty INTEGER,
-        competency_weights TEXT,
-        created_at TEXT
-    );
     CREATE TABLE IF NOT EXISTS sessions (
         session_id TEXT PRIMARY KEY,
         candidate_name TEXT,
         job_title TEXT,
-        job_id TEXT,
         video_path TEXT,
         audio_path TEXT,
         transcript TEXT,
@@ -97,147 +67,154 @@ def init_db():
         score_delta REAL,
         note TEXT
     );
+    CREATE TABLE IF NOT EXISTS job_postings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE TABLE IF NOT EXISTS candidate_accounts (
+        candidate_id TEXT PRIMARY KEY,
+        password TEXT NOT NULL,
+        full_name TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS candidate_profiles (
+        candidate_id TEXT PRIMARY KEY,
+        resume_path TEXT NOT NULL,
+        profile_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (candidate_id) REFERENCES candidate_accounts(candidate_id)
+    );
+    CREATE TABLE IF NOT EXISTS live_interviews (
+        session_id TEXT PRIMARY KEY,
+        candidate_id TEXT NOT NULL,
+        candidate_name TEXT NOT NULL,
+        question TEXT NOT NULL,
+        question_index INTEGER NOT NULL DEFAULT 0,
+        transcript TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'live',
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        pending_question TEXT NOT NULL DEFAULT '',
+        pending_status TEXT NOT NULL DEFAULT 'none',
+        question_count INTEGER NOT NULL DEFAULT 0,
+        interview_context TEXT NOT NULL DEFAULT '[]'
+    );
     """)
+    conn.execute(
+        """INSERT OR IGNORE INTO candidate_accounts
+        (candidate_id, password, full_name)
+        VALUES (?, ?, ?)""",
+        ("candidate01", "interview123", "Demo Candidate"),
+    )
+    default_jobs = [
+        (
+            "Python Backend Developer",
+            "Build reliable REST APIs and backend services with Python. Work with FastAPI or Django, PostgreSQL, automated tests, Git, and cloud deployment. We are looking for strong problem-solving, clean coding, and API design skills.",
+        ),
+        (
+            "Frontend React Developer",
+            "Create accessible, responsive interfaces with React and modern JavaScript or TypeScript. Collaborate with designers and backend engineers, integrate APIs, write maintainable components, and improve user experience through thoughtful testing.",
+        ),
+    ]
+    for title, description in default_jobs:
+        conn.execute(
+            """INSERT INTO job_postings (title, description, created_at, is_active)
+            SELECT ?, ?, datetime('now'), 1
+            WHERE NOT EXISTS (SELECT 1 FROM job_postings WHERE title = ?)""",
+            (title, description, title),
+        )
+    conn.commit()
+    # Migrate existing databases that lack the new columns
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(live_interviews)").fetchall()}
+    for col, definition in [
+        ("pending_question",  "TEXT NOT NULL DEFAULT ''"),
+        ("pending_status",    "TEXT NOT NULL DEFAULT 'none'"),
+        ("question_count",    "INTEGER NOT NULL DEFAULT 0"),
+        ("interview_context", "TEXT NOT NULL DEFAULT '[]'"),
+    ]:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE live_interviews ADD COLUMN {col} {definition}")
     conn.commit()
     conn.close()
 
 
 # --- writes (called by whoever produces that data type) ---
 
-def save_recruiter_user(user):
-    conn = get_connection()
-    d = asdict(user)
-    conn.execute(
-        """INSERT OR REPLACE INTO recruiter_users (username, password_hash, full_name, created_at)
-        VALUES (:username, :password_hash, :full_name, :created_at)""",
-        {**d, "created_at": str(d["created_at"])},
-    )
-    conn.commit()
-    conn.close()
-
-
-def get_recruiter_user(username):
-    conn = get_connection()
-    row = conn.execute(
-        "SELECT * FROM recruiter_users WHERE username = ?", (username,)
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else None
-
-
-def save_candidate(candidate):
-    conn = get_connection()
-    d = asdict(candidate)
-    conn.execute(
-        """INSERT OR REPLACE INTO candidates
-        (candidate_id, job_id, name, email, invite_code, status, session_id, invited_at)
-        VALUES (:candidate_id, :job_id, :name, :email, :invite_code, :status, :session_id, :invited_at)""",
-        {**d, "invited_at": str(d["invited_at"])},
-    )
-    conn.commit()
-    conn.close()
-
-
-def update_candidate_status(candidate_id, status, session_id=None):
-    conn = get_connection()
-    if session_id is not None:
-        conn.execute(
-            "UPDATE candidates SET status = ?, session_id = ? WHERE candidate_id = ?",
-            (status, session_id, candidate_id),
-        )
-    else:
-        conn.execute(
-            "UPDATE candidates SET status = ? WHERE candidate_id = ?",
-            (status, candidate_id),
-        )
-    conn.commit()
-    conn.close()
-
-
-def regenerate_invite_code(candidate_id, new_code):
-    conn = get_connection()
-    conn.execute(
-        "UPDATE candidates SET invite_code = ?, status = 'invited' WHERE candidate_id = ?",
-        (new_code, candidate_id),
-    )
-    conn.commit()
-    conn.close()
-
-
-def delete_candidate(candidate_id):
-    conn = get_connection()
-    conn.execute("DELETE FROM candidates WHERE candidate_id = ?", (candidate_id,))
-    conn.commit()
-    conn.close()
-
-
-def get_candidate_by_invite_code(invite_code):
-    conn = get_connection()
-    row = conn.execute(
-        "SELECT * FROM candidates WHERE invite_code = ?", (invite_code,)
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else None
-
-
-def get_candidates_for_job(job_id):
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT * FROM candidates WHERE job_id = ? ORDER BY invited_at DESC", (job_id,)
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-
-def get_all_candidates():
-    """All invited candidates across every job posting, with job title
-    joined in — powers the unified candidate-status tracker on the dashboard.
-    """
-    conn = get_connection()
-    rows = conn.execute("""
-        SELECT c.*, j.title AS job_title
-        FROM candidates c
-        LEFT JOIN job_postings j ON c.job_id = j.job_id
-        ORDER BY c.invited_at DESC
-    """).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-
-def save_job_posting(job):
-    conn = get_connection()
-    d = asdict(job)
-    conn.execute(
-        """INSERT OR REPLACE INTO job_postings
-        (job_id, title, description, required_skills, experience_level, department,
-         num_rounds, time_limit_seconds, adaptive_difficulty, competency_weights, created_at)
-        VALUES (:job_id, :title, :description, :required_skills, :experience_level, :department,
-                :num_rounds, :time_limit_seconds, :adaptive_difficulty, :competency_weights, :created_at)""",
-        {
-            **d,
-            "required_skills": json.dumps(d["required_skills"]),
-            "adaptive_difficulty": int(d["adaptive_difficulty"]),
-            "competency_weights": json.dumps(d["competency_weights"]),
-            "created_at": str(d["created_at"]),
-        },
-    )
-    conn.commit()
-    conn.close()
-
-
 def save_session(session):
     conn = get_connection()
     d = asdict(session)
     conn.execute(
         """INSERT OR REPLACE INTO sessions
-        (session_id, candidate_name, job_title, job_id, video_path, audio_path,
+        (session_id, candidate_name, job_title, video_path, audio_path,
          transcript, started_at, completed_at, status)
-        VALUES (:session_id, :candidate_name, :job_title, :job_id, :video_path, :audio_path,
+        VALUES (:session_id, :candidate_name, :job_title, :video_path, :audio_path,
                 :transcript, :started_at, :completed_at, :status)""",
         {**d, "started_at": str(d["started_at"]), "completed_at": str(d["completed_at"])},
     )
     conn.commit()
     conn.close()
+
+
+def authenticate_candidate(candidate_id, password):
+    conn = get_connection()
+    account = conn.execute(
+        """SELECT candidate_id, full_name FROM candidate_accounts
+        WHERE candidate_id = ? AND password = ?""",
+        (candidate_id, password),
+    ).fetchone()
+    conn.close()
+    return dict(account) if account else None
+
+
+def create_candidate_account(candidate_id, password, full_name):
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO candidate_accounts (candidate_id, password, full_name)
+            VALUES (?, ?, ?)""",
+            (candidate_id, password, full_name),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+    return True
+
+
+def get_candidate_accounts():
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT candidate_id, full_name FROM candidate_accounts ORDER BY full_name"
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def save_candidate_profile(candidate_id: str, resume_path: str, profile_json: str):
+    conn = get_connection()
+    conn.execute(
+        """INSERT OR REPLACE INTO candidate_profiles
+        (candidate_id, resume_path, profile_json, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)""",
+        (candidate_id, resume_path, profile_json),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_candidate_profile(candidate_id: str):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM candidate_profiles WHERE candidate_id = ?", (candidate_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    profile = dict(row)
+    profile["profile"] = json.loads(profile.pop("profile_json"))
+    return profile
 
 
 def save_integrity_flag(flag):
@@ -289,32 +266,127 @@ def save_fairness_flag(flag):
 
 # --- reads (called by app/reports/ for dashboard + report pages) ---
 
-def delete_job_posting(job_id):
-    conn = get_connection()
-    conn.execute("DELETE FROM job_postings WHERE job_id = ?", (job_id,))
-    conn.commit()
-    conn.close()
-
-
-def get_all_job_postings():
-    conn = get_connection()
-    rows = conn.execute("SELECT * FROM job_postings ORDER BY created_at DESC").fetchall()
-    conn.close()
-    out = []
-    for r in rows:
-        d = dict(r)
-        d["required_skills"] = json.loads(d["required_skills"] or "[]")
-        d["competency_weights"] = json.loads(d["competency_weights"] or "{}")
-        d["adaptive_difficulty"] = bool(d["adaptive_difficulty"])
-        out.append(d)
-    return out
-
-
 def get_all_sessions():
     conn = get_connection()
     rows = conn.execute("SELECT * FROM sessions ORDER BY started_at DESC").fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def start_live_interview(session_id, candidate_id, candidate_name, question, question_index=0):
+    conn = get_connection()
+    conn.execute(
+        """INSERT OR REPLACE INTO live_interviews
+        (session_id, candidate_id, candidate_name, question, question_index,
+         transcript, status, updated_at)
+        VALUES (?, ?, ?, ?, ?, '', 'live', CURRENT_TIMESTAMP)""",
+        (session_id, candidate_id, candidate_name, question, question_index),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_live_interview(session_id, **fields):
+    allowed = {
+        "question", "question_index", "transcript", "status",
+        "pending_question", "pending_status", "question_count", "interview_context",
+    }
+    changes = {key: value for key, value in fields.items() if key in allowed}
+    if not changes:
+        return
+    assignments = ", ".join(f"{key} = ?" for key in changes)
+    values = list(changes.values()) + [session_id]
+    conn = get_connection()
+    conn.execute(
+        f"UPDATE live_interviews SET {assignments}, updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
+        values,
+    )
+    conn.commit()
+    conn.close()
+
+
+def save_pending_question(session_id: str, question: str) -> None:
+    """Save an AI-generated question as pending interviewer approval."""
+    update_live_interview(session_id, pending_question=question, pending_status="pending")
+
+
+def approve_pending_question(session_id: str, question: str | None = None) -> None:
+    """Approve (and optionally overwrite) the pending question — makes it visible to the candidate."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT pending_question, question_index, question_count, interview_context, transcript FROM live_interviews WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return
+    approved_q = question if question is not None else row["pending_question"]
+    new_index = row["question_index"] + 1
+    new_count = row["question_count"] + 1
+    update_live_interview(
+        session_id,
+        question=approved_q,
+        question_index=new_index,
+        question_count=new_count,
+        transcript="",
+        pending_question="",
+        pending_status="approved",
+    )
+
+
+def get_pending_question(session_id: str) -> dict | None:
+    """Return the pending question info for a session, or None if not pending."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT pending_question, pending_status, question_count FROM live_interviews WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_live_interviews():
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM live_interviews WHERE status = 'live' ORDER BY updated_at DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_live_interview(session_id):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM live_interviews WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def save_job_posting(title: str, description: str):
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO job_postings (title, description, created_at, is_active) VALUES (?, ?, datetime('now'), 1)",
+        (title, description),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_active_job_postings():
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT id, title, description, created_at FROM job_postings WHERE is_active = 1 ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def deactivate_job_posting(job_id: int):
+    conn = get_connection()
+    conn.execute("UPDATE job_postings SET is_active = 0 WHERE id = ?", (job_id,))
+    conn.commit()
+    conn.close()
 
 
 def get_session_scores(session_id):
@@ -326,20 +398,6 @@ def get_session_scores(session_id):
     return [dict(r) for r in rows]
 
 
-def get_session_explanations(session_id):
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT * FROM explanations WHERE session_id = ?", (session_id,)
-    ).fetchall()
-    conn.close()
-    out = []
-    for r in rows:
-        d = dict(r)
-        d["supporting_phrases"] = json.loads(d["supporting_phrases"] or "[]")
-        out.append(d)
-    return out
-
-
 def get_session_flags(session_id):
     conn = get_connection()
     rows = conn.execute(
@@ -349,30 +407,29 @@ def get_session_flags(session_id):
     return [dict(r) for r in rows]
 
 
-def get_all_integrity_flags():
-    """All integrity flags across every session, newest first — powers the
-    Integrity Log page. Joined with session info so the page can show
-    which candidate/job each flag belongs to.
-    """
+def get_session_explanations(session_id):
     conn = get_connection()
-    rows = conn.execute("""
-        SELECT f.*, s.candidate_name, s.job_title
-        FROM integrity_flags f
-        LEFT JOIN sessions s ON f.session_id = s.session_id
-        ORDER BY f.timestamp DESC
-    """).fetchall()
+    rows = conn.execute(
+        "SELECT * FROM explanations WHERE session_id = ?", (session_id,)
+    ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    explanations = []
+    for row in rows:
+        item = dict(row)
+        item["supporting_phrases"] = json.loads(item["supporting_phrases"] or "[]")
+        explanations.append(item)
+    return explanations
+
+
+def get_all_integrity_flags():
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM integrity_flags ORDER BY timestamp DESC").fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 
 def get_all_fairness_flags():
-    """All fairness/bias flags across every session — powers the Bias Audit page."""
     conn = get_connection()
-    rows = conn.execute("""
-        SELECT f.*, s.candidate_name, s.job_title
-        FROM fairness_flags f
-        LEFT JOIN sessions s ON f.session_id = s.session_id
-        ORDER BY f.id DESC
-    """).fetchall()
+    rows = conn.execute("SELECT * FROM fairness_flags ORDER BY id DESC").fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    return [dict(row) for row in rows]

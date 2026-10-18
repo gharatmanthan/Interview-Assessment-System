@@ -1,0 +1,9 @@
+{
+  "camera_index": 0,
+  "mic_device": "default",
+  "llm_provider": "Groq",
+  "llm_api_key": "",
+  "export_dir": "C:\\Users\\Manthan_Gharat\\Documents",
+  "backend_mode": "local",
+  "remote_api_url": ""
+}
