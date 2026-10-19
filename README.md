@@ -108,6 +108,28 @@ The API base URL for future desktop/frontend clients will be:
 https://YOUR-SERVICE.onrender.com/api/v1
 ```
 
+## Use two desktop PCs with the shared Render API
+
+The desktop app uses local SQLite by default. To make a candidate PC and an
+interviewer PC share accounts, jobs, and live interview state, configure both
+PCs before starting the app:
+
+```powershell
+$env:INTERVIEWIQ_BACKEND_MODE = "remote"
+$env:INTERVIEWIQ_API_URL = "https://interviewiq-api-736y.onrender.com/api/v1"
+python -m app.main --role interviewer
+```
+
+On the candidate PC, use the same two environment variables and start:
+
+```powershell
+python -m app.main --role candidate
+```
+
+The Render URL must be replaced if your service has a different URL. The
+Settings page also supports selecting **Shared Render API** and saving the
+same URL after logging in.
+
 ## Architecture (planned modules)
 
 1. **Interview Engine** (`app/ui/pages/interview_page.py`) — question flow, webcam/mic capture ✅ MVP done

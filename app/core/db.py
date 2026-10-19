@@ -10,6 +10,7 @@ of you to read at a glance.
 """
 import sqlite3
 import json
+import os
 from pathlib import Path
 from dataclasses import asdict
 
@@ -21,9 +22,14 @@ DB_PATH = Path(__file__).parent.parent.parent / "data" / "app.db"
 
 def _remote_client() -> RemoteApiClient | None:
     settings = load_settings()
-    if settings.get("backend_mode") != "remote":
+    backend_mode = os.environ.get(
+        "INTERVIEWIQ_BACKEND_MODE", settings.get("backend_mode", "local")
+    ).strip().lower()
+    if backend_mode != "remote":
         return None
-    base_url = str(settings.get("remote_api_url", "")).strip()
+    base_url = os.environ.get(
+        "INTERVIEWIQ_API_URL", settings.get("remote_api_url", "")
+    ).strip()
     if not base_url:
         raise RuntimeError("Remote backend is enabled but remote API URL is empty.")
     return RemoteApiClient(base_url)
