@@ -172,17 +172,20 @@ def init_db():
         ("pending_status",    "TEXT NOT NULL DEFAULT 'none'"),
         ("question_count",    "INTEGER NOT NULL DEFAULT 0"),
         ("interview_context", "TEXT NOT NULL DEFAULT '[]'"),
-        ("confidence", "REAL NOT NULL DEFAULT 0"),
     ]:
         if col not in existing:
             conn.execute(f"ALTER TABLE live_interviews ADD COLUMN {col} {definition}")
     integrity_columns = {
         row[1] for row in conn.execute("PRAGMA table_info(integrity_flags)").fetchall()
     }
-    if "confidence" not in integrity_columns:
-        conn.execute(
-            "ALTER TABLE integrity_flags ADD COLUMN confidence REAL NOT NULL DEFAULT 0"
-        )
+    for col, definition in [
+        ("confidence", "REAL NOT NULL DEFAULT 0"),
+        ("review_status", "TEXT NOT NULL DEFAULT 'open'"),
+        ("review_note", "TEXT NOT NULL DEFAULT ''"),
+        ("reviewed_at", "TEXT"),
+    ]:
+        if col not in integrity_columns:
+            conn.execute(f"ALTER TABLE integrity_flags ADD COLUMN {col} {definition}")
     conn.commit()
     conn.close()
 
@@ -561,6 +564,31 @@ def get_session_flags(session_id):
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def review_integrity_flag(session_id, flag_id, review_status, review_note=""):
+    remote = _remote_client()
+    if remote:
+        return remote.review_integrity_flag(
+            session_id, flag_id, review_status, review_note
+        )
+    conn = get_connection()
+    conn.execute(
+        """
+        UPDATE integrity_flags
+        SET review_status = ?, review_note = ?,
+            reviewed_at = CASE WHEN ? = 'open' THEN NULL ELSE CURRENT_TIMESTAMP END
+        WHERE id = ? AND session_id = ?
+        """,
+        (review_status, review_note, review_status, flag_id, session_id),
+    )
+    row = conn.execute(
+        "SELECT * FROM integrity_flags WHERE id = ? AND session_id = ?",
+        (flag_id, session_id),
+    ).fetchone()
+    conn.commit()
+    conn.close()
+    return dict(row) if row else None
 
 
 def get_session_explanations(session_id):

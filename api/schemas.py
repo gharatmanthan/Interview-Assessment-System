@@ -63,3 +63,8 @@ class IntegrityFlagRequest(BaseModel):
     severity: str = Field(pattern="^(low|medium|high)$")
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     timestamp: str | None = None
+
+
+class IntegrityReviewRequest(BaseModel):
+    status: str = Field(pattern="^(open|reviewed|dismissed)$")
+    note: str = Field(default="", max_length=2000)

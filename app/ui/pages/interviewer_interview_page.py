@@ -135,6 +135,7 @@ class InterviewerInterviewPage(QWidget):
             max_workers=1, thread_name_prefix="session-refresh"
         )
         self._session_future = None
+        self.integrity_events = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(36, 30, 36, 30)
@@ -194,12 +195,18 @@ class InterviewerInterviewPage(QWidget):
         )
         monitor_layout.addWidget(self.video_label)
 
-        integrity_group = QGroupBox("Integrity Flags")
+        integrity_group = QGroupBox("Integrity Review Timeline")
         integrity_layout = QVBoxLayout(integrity_group)
-        self.integrity_flags_label = QLabel("No integrity flags recorded.")
-        self.integrity_flags_label.setWordWrap(True)
-        self.integrity_flags_label.setStyleSheet("color: #0F766E; font-size: 12px;")
-        integrity_layout.addWidget(self.integrity_flags_label)
+        self.integrity_list = QListWidget()
+        self.integrity_list.setMinimumHeight(130)
+        self.integrity_list.currentRowChanged.connect(
+            lambda row: self.review_integrity_button.setEnabled(row >= 0)
+        )
+        integrity_layout.addWidget(self.integrity_list)
+        self.review_integrity_button = QPushButton("Mark selected event reviewed")
+        self.review_integrity_button.setEnabled(False)
+        self.review_integrity_button.clicked.connect(self._review_selected_integrity)
+        integrity_layout.addWidget(self.review_integrity_button)
         monitor_layout.addWidget(integrity_group)
 
         # Live transcript
@@ -413,24 +420,48 @@ class InterviewerInterviewPage(QWidget):
 
     def _refresh_integrity_flags(self, session_id):
         if not session_id:
-            self.integrity_flags_label.setText("Select a live candidate to view integrity flags.")
-            self.integrity_flags_label.setStyleSheet("color: #6B7280; font-size: 12px;")
+            self.integrity_events = []
+            self.integrity_list.clear()
+            self.review_integrity_button.setEnabled(False)
             return
 
         flags = db.get_session_flags(session_id)
+        self.integrity_events = flags
+        self.integrity_list.clear()
         if not flags:
-            self.integrity_flags_label.setText("No integrity flags recorded.")
-            self.integrity_flags_label.setStyleSheet("color: #0F766E; font-size: 12px;")
+            self.integrity_list.addItem("No integrity events recorded.")
+            self.review_integrity_button.setEnabled(False)
             return
 
-        lines = [
-            f"[{flag.get('severity', 'medium').upper()}] "
-            f"{flag.get('detail', 'Unknown signal')} "
-            f"(confidence {float(flag.get('confidence', 0.0)):.0%})"
-            for flag in flags
-        ]
-        self.integrity_flags_label.setText("\n".join(lines))
-        self.integrity_flags_label.setStyleSheet("color: #B91C1C; font-size: 12px; font-weight: 600;")
+        for flag in flags:
+            timestamp = str(flag.get("timestamp", "")).replace("T", " ")[:19]
+            status = flag.get("review_status", "open").upper()
+            line = (
+                f"[{status}] {flag.get('severity', 'medium').upper()}  "
+                f"{timestamp}\n{flag.get('detail', 'Unknown signal')}  "
+                f"(confidence {float(flag.get('confidence', 0.0)):.0%})"
+            )
+            self.integrity_list.addItem(line)
+        self.review_integrity_button.setEnabled(bool(flags))
+
+    def _review_selected_integrity(self):
+        row = self.integrity_list.currentRow()
+        if row < 0 or row >= len(self.integrity_events):
+            return
+        session = next(
+            (item for item in self.latest_sessions
+             if (item["session_id"] or item["candidate_id"]) == self.selected_session_id),
+            None,
+        )
+        if not session or not session.get("session_id"):
+            return
+        event = self.integrity_events[row]
+        if event.get("review_status") == "reviewed":
+            return
+        db.review_integrity_flag(
+            session["session_id"], event["id"], "reviewed", "Reviewed by interviewer."
+        )
+        self._refresh_integrity_flags(session["session_id"])
 
     # ------------------------------------------------------------------
     # Approve / Skip / Regenerate

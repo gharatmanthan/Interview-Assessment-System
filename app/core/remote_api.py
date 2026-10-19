@@ -109,6 +109,15 @@ class RemoteApiClient:
     def get_session_flags(self, session_id: str) -> list[dict]:
         return self._request("GET", f"/interviews/{session_id}/integrity-flags")
 
+    def review_integrity_flag(
+        self, session_id: str, flag_id: int, review_status: str, review_note: str = ""
+    ) -> dict:
+        return self._request(
+            "PATCH",
+            f"/interviews/{session_id}/integrity-flags/{flag_id}",
+            json={"status": review_status, "note": review_note},
+        )
+
     def approve_pending_question(
         self, session_id: str, question: str | None = None,
     ) -> dict:

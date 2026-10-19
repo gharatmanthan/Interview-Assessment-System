@@ -11,6 +11,7 @@ from api.dependencies import require_role
 from api.schemas import (
     ApproveQuestionRequest,
     IntegrityFlagRequest,
+    IntegrityReviewRequest,
     InterviewUpdateRequest,
     StartInterviewRequest,
 )
@@ -89,6 +90,22 @@ def create_integrity_flag(
 def list_integrity_flags(session_id: str, _: dict = Depends(require_role("interviewer"))) -> list[dict]:
     _get_or_404(session_id)
     return db.get_session_flags(session_id)
+
+
+@router.patch("/{session_id}/integrity-flags/{flag_id}")
+def review_integrity_flag(
+    session_id: str,
+    flag_id: int,
+    payload: IntegrityReviewRequest,
+    _: dict = Depends(require_role("interviewer")),
+) -> dict:
+    _get_or_404(session_id)
+    flag = db.review_integrity_flag(
+        session_id, flag_id, payload.status, payload.note
+    )
+    if flag is None:
+        raise HTTPException(status_code=404, detail="Integrity event not found.")
+    return flag
 
 
 @router.patch("/{session_id}")

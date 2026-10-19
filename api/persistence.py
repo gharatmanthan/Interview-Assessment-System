@@ -55,7 +55,10 @@ CREATE TABLE IF NOT EXISTS integrity_flags (
     detail TEXT NOT NULL,
     severity TEXT NOT NULL,
     confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
-    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    review_status TEXT NOT NULL DEFAULT 'open',
+    review_note TEXT NOT NULL DEFAULT '',
+    reviewed_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS integrity_flags_session_timestamp_idx
     ON integrity_flags (session_id, timestamp DESC);
@@ -83,6 +86,18 @@ def init_db() -> None:
         conn.execute(
             "ALTER TABLE integrity_flags ADD COLUMN IF NOT EXISTS confidence "
             "DOUBLE PRECISION NOT NULL DEFAULT 0"
+        )
+        conn.execute(
+            "ALTER TABLE integrity_flags ADD COLUMN IF NOT EXISTS review_status "
+            "TEXT NOT NULL DEFAULT 'open'"
+        )
+        conn.execute(
+            "ALTER TABLE integrity_flags ADD COLUMN IF NOT EXISTS review_note "
+            "TEXT NOT NULL DEFAULT ''"
+        )
+        conn.execute(
+            "ALTER TABLE integrity_flags ADD COLUMN IF NOT EXISTS reviewed_at "
+            "TIMESTAMPTZ"
         )
         conn.execute("ALTER TABLE candidate_accounts ADD COLUMN IF NOT EXISTS password_hash TEXT")
         conn.execute("ALTER TABLE candidate_accounts ALTER COLUMN password DROP NOT NULL")
@@ -295,7 +310,8 @@ def save_integrity_flag(
             INSERT INTO integrity_flags
                 (session_id, flag_type, detail, severity, confidence, timestamp)
             VALUES (%s, %s, %s, %s, %s, %s::timestamptz)
-            RETURNING id, session_id, flag_type, detail, severity, confidence, timestamp
+            RETURNING id, session_id, flag_type, detail, severity, confidence,
+                timestamp, review_status, review_note, reviewed_at
             """,
             (session_id, flag_type, detail, severity, confidence, timestamp),
         ).fetchone()
@@ -305,10 +321,28 @@ def get_session_flags(session_id: str) -> list[dict]:
     with connection() as conn:
         return conn.execute(
             """
-            SELECT id, session_id, flag_type, detail, severity, confidence, timestamp
+            SELECT id, session_id, flag_type, detail, severity, confidence,
+                timestamp, review_status, review_note, reviewed_at
             FROM integrity_flags
             WHERE session_id = %s
             ORDER BY timestamp DESC, id DESC
             """,
             (session_id,),
         ).fetchall()
+
+
+def review_integrity_flag(
+    session_id: str, flag_id: int, review_status: str, review_note: str
+) -> dict | None:
+    with connection() as conn:
+        return conn.execute(
+            """
+            UPDATE integrity_flags
+            SET review_status = %s, review_note = %s,
+                reviewed_at = CASE WHEN %s = 'open' THEN NULL ELSE NOW() END
+            WHERE id = %s AND session_id = %s
+            RETURNING id, session_id, flag_type, detail, severity, confidence,
+                timestamp, review_status, review_note, reviewed_at
+            """,
+            (review_status, review_note, review_status, flag_id, session_id),
+        ).fetchone()
