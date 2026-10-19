@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core import db
 from api.routes.interviews import router as interviews_router
+from api.routes.shared_data import router as shared_data_router
 
 
 def create_app() -> FastAPI:
@@ -25,6 +26,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     application.include_router(interviews_router, prefix="/api/v1")
+    application.include_router(shared_data_router, prefix="/api/v1")
     return application
 
 

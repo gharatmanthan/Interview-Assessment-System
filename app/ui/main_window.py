@@ -10,6 +10,7 @@ from app.ui.pages.interviewer_interview_page import InterviewerInterviewPage
 from app.ui.pages.login_page import RoleLoginPage
 from app.ui.pages.placeholder_page import PlaceholderPage
 from app.ui.pages.reports_page import ReportsPage
+from app.ui.pages.settings_page import SettingsPage
 
 
 class MainWindow(QMainWindow):
@@ -66,12 +67,7 @@ class MainWindow(QMainWindow):
                 "  • Linguistic markers consistent with AI-generated answers\n\n"
                 "Not yet implemented — this is the core novel research contribution.",
             ),
-            "settings": PlaceholderPage(
-                "Settings",
-                "Application configuration",
-                "Camera/mic device selection, scoring model configuration, "
-                "and export settings will live here.",
-            ),
+            "settings": SettingsPage(),
         }
 
         for page in self.pages.values():

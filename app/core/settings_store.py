@@ -17,6 +17,8 @@ DEFAULTS = {
     "llm_provider": "Groq",
     "llm_api_key": "",
     "export_dir": str(Path.home() / "Documents"),
+    "backend_mode": "local",
+    "remote_api_url": "",
 }
 
 

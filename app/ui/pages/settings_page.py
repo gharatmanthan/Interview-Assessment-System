@@ -95,6 +95,19 @@ class SettingsPage(QWidget):
         self.api_key_input.setPlaceholderText("Paste your API key")
         form.addWidget(self._field("API Key", self.api_key_input))
 
+        form.addWidget(self._section_label("Shared Backend"))
+
+        self.backend_combo = QComboBox()
+        self.backend_combo.addItem("This PC (local SQLite)", "local")
+        self.backend_combo.addItem("Shared Render API", "remote")
+        form.addWidget(self._field("Data backend", self.backend_combo))
+
+        self.remote_api_input = QLineEdit()
+        self.remote_api_input.setPlaceholderText(
+            "https://interviewiq-api-736y.onrender.com/api/v1"
+        )
+        form.addWidget(self._field("Remote API URL", self.remote_api_input))
+
         form.addWidget(self._section_label("Export"))
 
         export_row = QHBoxLayout()
@@ -154,6 +167,10 @@ class SettingsPage(QWidget):
             self.provider_combo.setCurrentIndex(provider_idx)
         self.api_key_input.setText(s["llm_api_key"])
         self.export_dir_input.setText(s["export_dir"])
+        backend_idx = self.backend_combo.findData(s.get("backend_mode", "local"))
+        if backend_idx >= 0:
+            self.backend_combo.setCurrentIndex(backend_idx)
+        self.remote_api_input.setText(s.get("remote_api_url", ""))
 
     def _save(self):
         settings_store.save_settings({
@@ -162,5 +179,7 @@ class SettingsPage(QWidget):
             "llm_provider": self.provider_combo.currentText(),
             "llm_api_key": self.api_key_input.text(),
             "export_dir": self.export_dir_input.text(),
+            "backend_mode": self.backend_combo.currentData(),
+            "remote_api_url": self.remote_api_input.text().strip().rstrip("/"),
         })
         QMessageBox.information(self, "Settings saved", "Your settings have been saved.")

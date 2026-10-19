@@ -16,7 +16,9 @@ class InterviewUpdateRequest(BaseModel):
     question: str | None = Field(default=None, min_length=1, max_length=2000)
     question_index: int | None = Field(default=None, ge=0)
     transcript: str | None = Field(default=None, max_length=100000)
-    status: str | None = Field(default=None, pattern="^(live|complete|cancelled)$")
+    status: str | None = Field(
+        default=None, pattern="^(live|complete|completed|cancelled)$"
+    )
     pending_question: str | None = Field(default=None, max_length=2000)
     pending_status: str | None = Field(
         default=None, pattern="^(none|pending|approved)$"
@@ -30,3 +32,17 @@ class InterviewUpdateRequest(BaseModel):
 
 class ApproveQuestionRequest(BaseModel):
     question: str | None = Field(default=None, min_length=1, max_length=2000)
+
+
+class CandidateCredentials(BaseModel):
+    candidate_id: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class CandidateAccountRequest(CandidateCredentials):
+    full_name: str = Field(min_length=1, max_length=200)
+
+
+class JobPostingRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=10000)

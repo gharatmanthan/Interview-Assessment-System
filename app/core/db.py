@@ -13,7 +13,20 @@ import json
 from pathlib import Path
 from dataclasses import asdict
 
+from app.core.remote_api import RemoteApiClient
+from app.core.settings_store import load_settings
+
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "app.db"
+
+
+def _remote_client() -> RemoteApiClient | None:
+    settings = load_settings()
+    if settings.get("backend_mode") != "remote":
+        return None
+    base_url = str(settings.get("remote_api_url", "")).strip()
+    if not base_url:
+        raise RuntimeError("Remote backend is enabled but remote API URL is empty.")
+    return RemoteApiClient(base_url)
 
 
 def get_connection():
@@ -157,6 +170,9 @@ def save_session(session):
 
 
 def authenticate_candidate(candidate_id, password):
+    remote = _remote_client()
+    if remote:
+        return remote.authenticate_candidate(candidate_id, password)
     conn = get_connection()
     account = conn.execute(
         """SELECT candidate_id, full_name FROM candidate_accounts
@@ -168,6 +184,9 @@ def authenticate_candidate(candidate_id, password):
 
 
 def create_candidate_account(candidate_id, password, full_name):
+    remote = _remote_client()
+    if remote:
+        return remote.create_candidate_account(candidate_id, password, full_name)
     conn = get_connection()
     try:
         conn.execute(
@@ -184,6 +203,9 @@ def create_candidate_account(candidate_id, password, full_name):
 
 
 def get_candidate_accounts():
+    remote = _remote_client()
+    if remote:
+        return remote.get_candidate_accounts()
     conn = get_connection()
     rows = conn.execute(
         "SELECT candidate_id, full_name FROM candidate_accounts ORDER BY full_name"
@@ -274,6 +296,12 @@ def get_all_sessions():
 
 
 def start_live_interview(session_id, candidate_id, candidate_name, question, question_index=0):
+    remote = _remote_client()
+    if remote:
+        remote.start_live_interview(
+            session_id, candidate_id, candidate_name, question, question_index
+        )
+        return
     conn = get_connection()
     conn.execute(
         """INSERT OR REPLACE INTO live_interviews
@@ -294,6 +322,10 @@ def update_live_interview(session_id, **fields):
     changes = {key: value for key, value in fields.items() if key in allowed}
     if not changes:
         return
+    remote = _remote_client()
+    if remote:
+        remote.update_live_interview(session_id, **changes)
+        return
     assignments = ", ".join(f"{key} = ?" for key in changes)
     values = list(changes.values()) + [session_id]
     conn = get_connection()
@@ -312,6 +344,10 @@ def save_pending_question(session_id: str, question: str) -> None:
 
 def approve_pending_question(session_id: str, question: str | None = None) -> None:
     """Approve (and optionally overwrite) the pending question — makes it visible to the candidate."""
+    remote = _remote_client()
+    if remote:
+        remote.approve_pending_question(session_id, question)
+        return
     conn = get_connection()
     row = conn.execute(
         "SELECT pending_question, question_index, question_count, interview_context, transcript FROM live_interviews WHERE session_id = ?",
@@ -346,6 +382,9 @@ def get_pending_question(session_id: str) -> dict | None:
 
 
 def get_live_interviews():
+    remote = _remote_client()
+    if remote:
+        return remote.list_live_interviews()
     conn = get_connection()
     rows = conn.execute(
         "SELECT * FROM live_interviews WHERE status = 'live' ORDER BY updated_at DESC"
@@ -355,6 +394,9 @@ def get_live_interviews():
 
 
 def get_live_interview(session_id):
+    remote = _remote_client()
+    if remote:
+        return remote.get_live_interview(session_id)
     conn = get_connection()
     row = conn.execute(
         "SELECT * FROM live_interviews WHERE session_id = ?", (session_id,)
@@ -364,6 +406,9 @@ def get_live_interview(session_id):
 
 
 def save_job_posting(title: str, description: str):
+    remote = _remote_client()
+    if remote:
+        return remote.save_job_posting(title, description)
     conn = get_connection()
     conn.execute(
         "INSERT INTO job_postings (title, description, created_at, is_active) VALUES (?, ?, datetime('now'), 1)",
@@ -374,6 +419,9 @@ def save_job_posting(title: str, description: str):
 
 
 def get_active_job_postings():
+    remote = _remote_client()
+    if remote:
+        return remote.get_active_job_postings()
     conn = get_connection()
     rows = conn.execute(
         "SELECT id, title, description, created_at FROM job_postings WHERE is_active = 1 ORDER BY created_at DESC"
