@@ -50,3 +50,10 @@ class JobPostingRequest(BaseModel):
 
 class FrameRequest(BaseModel):
     image: str = Field(min_length=1, max_length=500000)
+
+
+class IntegrityFlagRequest(BaseModel):
+    flag_type: str = Field(min_length=1, max_length=100)
+    detail: str = Field(min_length=1, max_length=2000)
+    severity: str = Field(pattern="^(low|medium|high)$")
+    timestamp: str | None = None

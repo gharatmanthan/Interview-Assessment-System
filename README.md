@@ -82,10 +82,9 @@ Interactive API documentation is available at `/docs`.
 ## Deploy the API to Render
 
 The repository includes a `Dockerfile` and `render.yaml` for deploying the
-API as a Render web service. This is the first cloud deployment stage. The
-current service uses SQLite for compatibility with the desktop app; cloud
-SQLite storage is not durable on a disposable service, so PostgreSQL should be
-connected before using this for real interview records.
+API as a Render web service. The deployed API uses PostgreSQL for shared,
+persistent interview data. Desktop clients may continue using local SQLite
+when remote mode is disabled.
 
 1. Rotate any API key that was previously stored in `data/settings.json`.
 2. Push the repository to GitHub.
@@ -95,10 +94,14 @@ connected before using this for real interview records.
    temporarily for API-only testing.
 5. Set `GROQ_API_KEY` using a newly generated key in Render's environment
    settings. Never commit it to the repository.
-6. After deployment, verify:
+6. Set `DATABASE_URL` to the pooled connection string from Neon. Keep it as a
+   Render secret and use the `postgresql://` or `postgres://` URL provided by
+   Neon.
+7. After deployment, verify:
 
 ```text
 https://YOUR-SERVICE.onrender.com/health
+https://YOUR-SERVICE.onrender.com/health/ready
 https://YOUR-SERVICE.onrender.com/docs
 ```
 

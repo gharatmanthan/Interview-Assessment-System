@@ -1,7 +1,7 @@
 """Shared candidate and job data endpoints for desktop clients."""
 from fastapi import APIRouter, HTTPException, status
 
-from app.core import db
+from api import persistence as db
 from api.schemas import CandidateAccountRequest, CandidateCredentials, JobPostingRequest
 
 router = APIRouter(tags=["shared-data"])

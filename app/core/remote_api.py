@@ -68,6 +68,24 @@ class RemoteApiClient:
         response.raise_for_status()
         return response.content
 
+    def save_integrity_flag(
+        self, session_id: str, flag_type: str, detail: str,
+        severity: str, timestamp: str,
+    ) -> dict:
+        return self._request(
+            "POST",
+            f"/interviews/{session_id}/integrity-flags",
+            json={
+                "flag_type": flag_type,
+                "detail": detail,
+                "severity": severity,
+                "timestamp": timestamp,
+            },
+        )
+
+    def get_session_flags(self, session_id: str) -> list[dict]:
+        return self._request("GET", f"/interviews/{session_id}/integrity-flags")
+
     def approve_pending_question(
         self, session_id: str, question: str | None = None,
     ) -> dict:

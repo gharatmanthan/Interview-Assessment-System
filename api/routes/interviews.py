@@ -1,12 +1,15 @@
 """Live interview synchronization endpoints."""
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, HTTPException, status
 from fastapi import Request
 from fastapi.responses import Response
 
-from app.core import db
+from api import persistence as db
 from api.schemas import (
     ApproveQuestionRequest,
+    IntegrityFlagRequest,
     InterviewUpdateRequest,
     StartInterviewRequest,
 )
@@ -62,6 +65,27 @@ def download_frame(session_id: str) -> Response:
     if frame is None:
         raise HTTPException(status_code=404, detail="No camera frame available.")
     return Response(content=frame, media_type="image/jpeg")
+
+
+@router.post("/{session_id}/integrity-flags", status_code=status.HTTP_201_CREATED)
+def create_integrity_flag(
+    session_id: str, payload: IntegrityFlagRequest
+) -> dict:
+    _get_or_404(session_id)
+    flag = db.save_integrity_flag(
+        session_id=session_id,
+        flag_type=payload.flag_type,
+        detail=payload.detail,
+        severity=payload.severity,
+        timestamp=payload.timestamp or datetime.now(timezone.utc).isoformat(),
+    )
+    return flag
+
+
+@router.get("/{session_id}/integrity-flags")
+def list_integrity_flags(session_id: str) -> list[dict]:
+    _get_or_404(session_id)
+    return db.get_session_flags(session_id)
 
 
 @router.patch("/{session_id}")

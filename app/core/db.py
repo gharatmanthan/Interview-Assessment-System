@@ -11,6 +11,7 @@ of you to read at a glance.
 import sqlite3
 import json
 import os
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from dataclasses import asdict
@@ -21,6 +22,16 @@ from app.core.settings_store import load_settings
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "app.db"
 _frame_upload_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="frame-upload")
 _frame_upload_future = None
+_integrity_upload_executor = ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="integrity-upload"
+)
+logger = logging.getLogger(__name__)
+
+
+def _log_background_failure(future):
+    error = future.exception()
+    if error is not None:
+        logger.error("Background integrity event upload failed: %s", error)
 
 
 def _remote_client() -> RemoteApiClient | None:
@@ -248,16 +259,50 @@ def get_candidate_profile(candidate_id: str):
     return profile
 
 
-def save_integrity_flag(flag):
+def save_integrity_flag(
+    flag=None,
+    *,
+    session_id=None,
+    flag_type=None,
+    detail=None,
+    severity=None,
+    timestamp=None,
+):
+    if flag is not None:
+        values = asdict(flag)
+    else:
+        values = {
+            "session_id": session_id,
+            "flag_type": flag_type,
+            "detail": detail,
+            "severity": severity,
+            "timestamp": timestamp,
+        }
+    remote = _remote_client()
+    if remote:
+        event_timestamp = values["timestamp"]
+        if hasattr(event_timestamp, "isoformat"):
+            event_timestamp = event_timestamp.isoformat()
+        upload = _integrity_upload_executor.submit(
+            remote.save_integrity_flag,
+            values["session_id"],
+            values["flag_type"],
+            values["detail"],
+            values["severity"],
+            event_timestamp,
+        )
+        upload.add_done_callback(_log_background_failure)
+        return None
     conn = get_connection()
-    d = asdict(flag)
-    conn.execute(
+    cursor = conn.execute(
         """INSERT INTO integrity_flags (session_id, flag_type, detail, severity, timestamp)
         VALUES (:session_id, :flag_type, :detail, :severity, :timestamp)""",
-        {**d, "timestamp": str(d["timestamp"])},
+        {**values, "timestamp": str(values["timestamp"])},
     )
     conn.commit()
+    event_id = cursor.lastrowid
     conn.close()
+    return {**values, "id": event_id, "timestamp": str(values["timestamp"])}
 
 
 def save_competency_score(score):
@@ -478,6 +523,9 @@ def get_session_scores(session_id):
 
 
 def get_session_flags(session_id):
+    remote = _remote_client()
+    if remote:
+        return remote.get_session_flags(session_id)
     conn = get_connection()
     rows = conn.execute(
         "SELECT * FROM integrity_flags WHERE session_id = ?", (session_id,)

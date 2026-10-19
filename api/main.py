@@ -1,10 +1,10 @@
 """FastAPI entry point for local and cloud deployment."""
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core import db
+from api import persistence as db
 from api.routes.interviews import router as interviews_router
 from api.routes.shared_data import router as shared_data_router
 
@@ -35,9 +35,27 @@ app = create_app()
 
 @app.on_event("startup")
 def initialize_database() -> None:
-    db.init_db()
+    if os.getenv("DATABASE_URL", "").strip():
+        db.init_db()
 
 
 @app.get("/health", tags=["system"])
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "interviewiq-api"}
+
+
+@app.get("/health/ready", tags=["system"])
+def readiness() -> dict[str, str]:
+    if not os.getenv("DATABASE_URL", "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="DATABASE_URL is not configured.",
+        )
+    try:
+        db.check_connection()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database is not reachable.",
+        ) from exc
+    return {"status": "ready", "service": "interviewiq-api"}
