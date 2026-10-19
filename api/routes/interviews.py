@@ -1,7 +1,7 @@
 """Live interview synchronization endpoints."""
-import binascii
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi import Request
 from fastapi.responses import Response
 
 from app.core import db
@@ -9,7 +9,6 @@ from api.schemas import (
     ApproveQuestionRequest,
     InterviewUpdateRequest,
     StartInterviewRequest,
-    FrameRequest,
 )
 
 router = APIRouter(prefix="/interviews", tags=["interviews"])
@@ -48,12 +47,11 @@ def get_interview(session_id: str) -> dict:
 
 
 @router.put("/{session_id}/frame", status_code=status.HTTP_204_NO_CONTENT)
-def upload_frame(session_id: str, payload: FrameRequest) -> None:
+async def upload_frame(session_id: str, request: Request) -> None:
     _get_or_404(session_id)
-    try:
-        frame = binascii.unhexlify(payload.image)
-    except (binascii.Error, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="Invalid frame data.") from exc
+    frame = await request.body()
+    if not frame or len(frame) > 400_000:
+        raise HTTPException(status_code=400, detail="Invalid or oversized frame.")
     _frames[session_id] = frame
 
 

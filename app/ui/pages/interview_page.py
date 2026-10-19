@@ -606,8 +606,8 @@ class InterviewPage(QWidget):
             if ok:
                 try:
                     db.upload_live_frame(self.session_id, encoded.tobytes())
-                except Exception as exc:
-                    self.record_status.setText(f"Camera sharing unavailable: {exc}")
+                except Exception:
+                    pass
         if self.live_frame_path:
             frame_path = self.live_frame_path.with_name(
                 f".{self.live_frame_path.stem}-{uuid4().hex}.tmp.jpg"

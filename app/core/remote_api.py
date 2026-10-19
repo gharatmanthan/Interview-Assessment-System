@@ -5,7 +5,7 @@ import requests
 
 
 class RemoteApiClient:
-    def __init__(self, base_url: str, timeout: float = 15):
+    def __init__(self, base_url: str, timeout: float = 5):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
@@ -50,11 +50,13 @@ class RemoteApiClient:
         return self._request("PATCH", f"/interviews/{session_id}", json=fields)
 
     def upload_frame(self, session_id: str, frame: bytes) -> None:
-        self._request(
-            "PUT",
-            f"/interviews/{session_id}/frame",
-            json={"image": frame.hex()},
+        response = requests.put(
+            f"{self.base_url}/interviews/{session_id}/frame",
+            data=frame,
+            headers={"Content-Type": "image/jpeg"},
+            timeout=self.timeout,
         )
+        response.raise_for_status()
 
     def download_frame(self, session_id: str) -> bytes | None:
         response = requests.get(

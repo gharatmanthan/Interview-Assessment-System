@@ -11,6 +11,7 @@ of you to read at a glance.
 import sqlite3
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from dataclasses import asdict
 
@@ -18,6 +19,8 @@ from app.core.remote_api import RemoteApiClient
 from app.core.settings_store import load_settings
 
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "app.db"
+_frame_upload_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="frame-upload")
+_frame_upload_future = None
 
 
 def _remote_client() -> RemoteApiClient | None:
@@ -409,6 +412,28 @@ def get_live_interview(session_id):
     ).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def upload_live_frame(session_id: str, frame: bytes) -> None:
+    global _frame_upload_future
+    remote = _remote_client()
+    if remote:
+        if _frame_upload_future is None or _frame_upload_future.done():
+            _frame_upload_future = _frame_upload_executor.submit(
+                remote.upload_frame, session_id, frame
+            )
+        return
+    frame_path = Path("data") / "live_frames" / f"{session_id}.jpg"
+    frame_path.parent.mkdir(parents=True, exist_ok=True)
+    frame_path.write_bytes(frame)
+
+
+def download_live_frame(session_id: str) -> bytes | None:
+    remote = _remote_client()
+    if remote:
+        return remote.download_frame(session_id)
+    frame_path = Path("data") / "live_frames" / f"{session_id}.jpg"
+    return frame_path.read_bytes() if frame_path.exists() else None
 
 
 def save_job_posting(title: str, description: str):

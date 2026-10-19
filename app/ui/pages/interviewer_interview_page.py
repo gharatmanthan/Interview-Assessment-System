@@ -9,6 +9,7 @@ The interviewer can:
 """
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from PySide6.QtCore import QObject, QThread, Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap
@@ -125,6 +126,15 @@ class InterviewerInterviewPage(QWidget):
         self.latest_sessions = []
         self._regen_thread = None
         self._regen_worker = None
+        self._frame_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="frame-download"
+        )
+        self._frame_future = None
+        self._frame_session_id = None
+        self._session_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="session-refresh"
+        )
+        self._session_future = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(36, 30, 36, 30)
@@ -241,7 +251,7 @@ class InterviewerInterviewPage(QWidget):
         # Refresh timer — 1 s
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self.refresh_sessions)
-        self.refresh_timer.start(1000)
+        self.refresh_timer.start(1500)
         self.refresh_sessions()
 
     # ------------------------------------------------------------------
@@ -249,6 +259,18 @@ class InterviewerInterviewPage(QWidget):
     # ------------------------------------------------------------------
 
     def refresh_sessions(self):
+        if self._session_future is None:
+            self._session_future = self._session_executor.submit(
+                self._load_sessions
+            )
+            QTimer.singleShot(50, self._apply_session_refresh)
+            return
+        if not self._session_future.done():
+            return
+        self._apply_session_refresh()
+
+    @staticmethod
+    def _load_sessions():
         live_sessions = db.get_live_interviews()
         live_candidate_ids = {s["candidate_id"] for s in live_sessions}
         sessions = list(live_sessions)
@@ -266,6 +288,20 @@ class InterviewerInterviewPage(QWidget):
                     "pending_question": "",
                     "pending_status": "none",
                 })
+        return sessions
+
+    def _apply_session_refresh(self):
+        if self._session_future is None or not self._session_future.done():
+            if self._session_future is not None:
+                QTimer.singleShot(50, self._apply_session_refresh)
+            return
+        future = self._session_future
+        self._session_future = None
+        try:
+            sessions = future.result()
+        except Exception as exc:
+            self.status_label.setText(f"Live monitor unavailable: {exc}")
+            return
         selected_id = self.selected_session_id
         self.latest_sessions = sessions
         self.sessions_list.blockSignals(True)
@@ -310,21 +346,9 @@ class InterviewerInterviewPage(QWidget):
         from app.engine.question_generator import MAX_QUESTIONS
         self.q_count_lbl.setText(f"Q {q_count} / {MAX_QUESTIONS}" if is_live else "")
 
-        # Camera feed
+        # Request the frame outside the Qt UI thread.
         frame_path = session.get("session_id") if is_live else None
-        if frame_path:
-            frame_bytes = None
-            try:
-                frame_bytes = db.download_live_frame(frame_path)
-            except Exception as exc:
-                self.status_label.setText(f"Camera feed unavailable: {exc}")
-            pixmap = QPixmap()
-            if frame_bytes:
-                pixmap.loadFromData(frame_bytes, "JPG")
-            if not pixmap.isNull():
-                self.video_label.setPixmap(
-                    pixmap.scaled(self.video_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                )
+        self._request_frame(frame_path)
 
         self._refresh_integrity_flags(session.get("session_id") if is_live else None)
 
@@ -341,6 +365,43 @@ class InterviewerInterviewPage(QWidget):
             "Live session. Use the panel above to approve the AI question."
             if is_live else "Candidate is registered and ready."
         )
+
+    def _request_frame(self, session_id):
+        if not session_id:
+            self._frame_session_id = None
+            self._frame_future = None
+            return
+        if self._frame_future is not None and not self._frame_future.done():
+            return
+        self._frame_session_id = session_id
+        self._frame_future = self._frame_executor.submit(
+            db.download_live_frame, session_id
+        )
+        QTimer.singleShot(50, self._apply_frame_result)
+
+    def _apply_frame_result(self):
+        future = self._frame_future
+        if future is None or not future.done():
+            if future is not None:
+                QTimer.singleShot(50, self._apply_frame_result)
+            return
+        self._frame_future = None
+        try:
+            frame_bytes = future.result()
+        except Exception as exc:
+            self.status_label.setText(f"Camera feed unavailable: {exc}")
+            return
+        if not frame_bytes or self._frame_session_id != self.selected_session_id:
+            return
+        pixmap = QPixmap()
+        if pixmap.loadFromData(frame_bytes, "JPG"):
+            self.video_label.setPixmap(
+                pixmap.scaled(
+                    self.video_label.size(),
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                )
+            )
 
     def _clear_monitor(self):
         self.candidate_label.setText("No active candidate selected")
@@ -488,4 +549,6 @@ class InterviewerInterviewPage(QWidget):
 
     def cleanup(self):
         self.refresh_timer.stop()
+        self._frame_executor.shutdown(wait=False, cancel_futures=True)
+        self._session_executor.shutdown(wait=False, cancel_futures=True)
         self._cleanup_regen()
