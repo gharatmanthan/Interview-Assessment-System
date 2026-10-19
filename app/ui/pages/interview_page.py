@@ -598,6 +598,16 @@ class InterviewPage(QWidget):
             )
             self.integrity_badge.setStyleSheet("color: #EF4444; font-weight: 600;")
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        if self.session_id and self.frame_count % 30 == 0:
+            ok, encoded = cv2.imencode(
+                ".jpg", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+                [int(cv2.IMWRITE_JPEG_QUALITY), 65],
+            )
+            if ok:
+                try:
+                    db.upload_live_frame(self.session_id, encoded.tobytes())
+                except Exception as exc:
+                    self.record_status.setText(f"Camera sharing unavailable: {exc}")
         if self.live_frame_path:
             frame_path = self.live_frame_path.with_name(
                 f".{self.live_frame_path.stem}-{uuid4().hex}.tmp.jpg"

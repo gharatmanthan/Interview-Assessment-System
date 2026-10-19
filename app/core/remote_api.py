@@ -49,6 +49,23 @@ class RemoteApiClient:
     def update_live_interview(self, session_id: str, **fields) -> dict:
         return self._request("PATCH", f"/interviews/{session_id}", json=fields)
 
+    def upload_frame(self, session_id: str, frame: bytes) -> None:
+        self._request(
+            "PUT",
+            f"/interviews/{session_id}/frame",
+            json={"image": frame.hex()},
+        )
+
+    def download_frame(self, session_id: str) -> bytes | None:
+        response = requests.get(
+            f"{self.base_url}/interviews/{session_id}/frame",
+            timeout=self.timeout,
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.content
+
     def approve_pending_question(
         self, session_id: str, question: str | None = None,
     ) -> dict:

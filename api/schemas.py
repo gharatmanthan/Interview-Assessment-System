@@ -46,3 +46,7 @@ class CandidateAccountRequest(CandidateCredentials):
 class JobPostingRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str = Field(min_length=1, max_length=10000)
+
+
+class FrameRequest(BaseModel):
+    image: str = Field(min_length=1, max_length=500000)

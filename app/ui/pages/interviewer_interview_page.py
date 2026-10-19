@@ -313,7 +313,14 @@ class InterviewerInterviewPage(QWidget):
         # Camera feed
         frame_path = session.get("session_id") if is_live else None
         if frame_path:
-            pixmap = QPixmap(f"data/live_frames/{frame_path}.jpg")
+            frame_bytes = None
+            try:
+                frame_bytes = db.download_live_frame(frame_path)
+            except Exception as exc:
+                self.status_label.setText(f"Camera feed unavailable: {exc}")
+            pixmap = QPixmap()
+            if frame_bytes:
+                pixmap.loadFromData(frame_bytes, "JPG")
             if not pixmap.isNull():
                 self.video_label.setPixmap(
                     pixmap.scaled(self.video_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)

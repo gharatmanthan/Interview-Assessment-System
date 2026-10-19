@@ -1,14 +1,19 @@
 """Live interview synchronization endpoints."""
+import binascii
+
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import Response
 
 from app.core import db
 from api.schemas import (
     ApproveQuestionRequest,
     InterviewUpdateRequest,
     StartInterviewRequest,
+    FrameRequest,
 )
 
 router = APIRouter(prefix="/interviews", tags=["interviews"])
+_frames: dict[str, bytes] = {}
 
 
 def _get_or_404(session_id: str) -> dict:
@@ -40,6 +45,25 @@ def start_interview(payload: StartInterviewRequest) -> dict:
 @router.get("/{session_id}")
 def get_interview(session_id: str) -> dict:
     return _get_or_404(session_id)
+
+
+@router.put("/{session_id}/frame", status_code=status.HTTP_204_NO_CONTENT)
+def upload_frame(session_id: str, payload: FrameRequest) -> None:
+    _get_or_404(session_id)
+    try:
+        frame = binascii.unhexlify(payload.image)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid frame data.") from exc
+    _frames[session_id] = frame
+
+
+@router.get("/{session_id}/frame")
+def download_frame(session_id: str) -> Response:
+    _get_or_404(session_id)
+    frame = _frames.get(session_id)
+    if frame is None:
+        raise HTTPException(status_code=404, detail="No camera frame available.")
+    return Response(content=frame, media_type="image/jpeg")
 
 
 @router.patch("/{session_id}")
