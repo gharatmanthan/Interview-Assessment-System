@@ -40,6 +40,13 @@ def create_app() -> FastAPI:
         methods=["GET"],
         include_in_schema=False,
     )
+    interviewer_index = Path(__file__).parent.parent / "web" / "interviewer.html"
+    application.add_api_route(
+        "/interviewer",
+        lambda: FileResponse(interviewer_index),
+        methods=["GET"],
+        include_in_schema=False,
+    )
     return application
 
 

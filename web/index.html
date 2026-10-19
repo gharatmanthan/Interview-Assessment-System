@@ -8,9 +8,10 @@
     body { margin: 0; font: 16px system-ui, sans-serif; background: #f4f7fb; color: #172033; }
     main { max-width: 560px; margin: 8vh auto; padding: 32px; background: white; border-radius: 16px; box-shadow: 0 12px 40px #17203318; }
     h1 { margin-top: 0; } label { display: block; margin-top: 16px; font-weight: 600; }
-    input { box-sizing: border-box; width: 100%; padding: 12px; margin-top: 6px; border: 1px solid #cbd5e1; border-radius: 8px; }
+    input, textarea { box-sizing: border-box; width: 100%; padding: 12px; margin-top: 6px; border: 1px solid #cbd5e1; border-radius: 8px; }
     button { margin-top: 22px; padding: 12px 18px; border: 0; border-radius: 8px; background: #2563eb; color: white; font-weight: 700; cursor: pointer; }
-    #message { margin-top: 18px; } .muted { color: #64748b; }
+    button:disabled { opacity: .6; cursor: wait; } #message { margin-top: 18px; } .muted { color: #64748b; }
+    video { width: 100%; margin-top: 16px; border-radius: 10px; background: #111827; }
   </style>
 </head>
 <body>
@@ -36,7 +37,7 @@
   <p id="message"></p>
 </main>
 <script>
-const token = new URLSearchParams(location.search).get("token");
+const invitationToken = new URLSearchParams(location.search).get("token");
 const message = document.querySelector("#message");
 const form = document.querySelector("#registration");
 const interview = document.querySelector("#interview");
@@ -46,28 +47,43 @@ const camera = document.querySelector("#camera");
 const question = document.querySelector("#question");
 const answer = document.querySelector("#answer");
 let invitation;
-let accessToken = localStorage.getItem("interviewiq_access_token");
-let sessionId;
+let accessToken = localStorage.getItem("interviewiq_candidate_token");
 let candidateId;
+let candidateName = "Candidate";
+let sessionId;
 let stream;
 let frameTimer;
-const api = "/api/v1/public/invitations/";
+
 function tokenSubject(value) {
   try {
-    const payload = value.split(".")[0].replace(/-/g, "+").replace(/_/g, "/");
-    return JSON.parse(atob(payload)).sub;
+    const encoded = value.split(".")[0].replace(/-/g, "+").replace(/_/g, "/");
+    return JSON.parse(atob(encoded)).sub;
   } catch (_) {
     return null;
   }
 }
+
 candidateId = tokenSubject(accessToken);
+
 async function load() {
-  if (!token) { message.textContent = "This page requires an invitation token."; return; }
-  const response = await fetch(api + encodeURIComponent(token));
-  if (!response.ok) { message.textContent = "This invitation is invalid or expired."; return; }
-  invitation = await response.json();
+  if (!invitationToken) {
+    message.textContent = "This page requires an invitation token.";
+    return;
+  }
+  const response = await fetch("/api/v1/public/invitations/" + encodeURIComponent(invitationToken));
+  if (!response.ok) {
+    const cached = localStorage.getItem("interviewiq_candidate_job");
+    if (!accessToken || !cached) {
+      message.textContent = "This invitation is invalid or expired.";
+      return;
+    }
+    invitation = JSON.parse(cached);
+  } else {
+    invitation = await response.json();
+    localStorage.setItem("interviewiq_candidate_job", JSON.stringify(invitation));
+  }
   document.querySelector("#job").textContent = `Interview for ${invitation.title}`;
-  if (accessToken) {
+  if (accessToken && candidateId) {
     interview.hidden = false;
     document.querySelector("#candidate-status").textContent =
       "Your registration is ready. Start when you are prepared.";
@@ -75,23 +91,33 @@ async function load() {
     form.hidden = false;
   }
 }
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const data = Object.fromEntries(new FormData(form));
-  const response = await fetch(api + encodeURIComponent(token) + "/register", {
-    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(data)
-  });
+  const response = await fetch(
+    "/api/v1/public/invitations/" + encodeURIComponent(invitationToken) + "/register",
+    {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(Object.fromEntries(new FormData(form)))
+    }
+  );
   const result = await response.json();
-  if (!response.ok) { message.textContent = result.detail || "Registration failed."; return; }
-  localStorage.setItem("interviewiq_access_token", result.access_token);
+  if (!response.ok) {
+    message.textContent = result.detail || "Registration failed.";
+    return;
+  }
+  localStorage.setItem("interviewiq_candidate_token", result.access_token);
   accessToken = result.access_token;
   candidateId = result.candidate_id;
+  candidateName = result.full_name;
   message.textContent = "Registration complete. Candidate interview access is ready.";
   form.hidden = true;
   interview.hidden = false;
   document.querySelector("#candidate-status").textContent =
     "Registration complete. Start when you are prepared.";
 });
+
 startButton.addEventListener("click", async () => {
   startButton.disabled = true;
   try {
@@ -102,8 +128,8 @@ startButton.addEventListener("click", async () => {
       headers: {"Content-Type": "application/json", "Authorization": `Bearer ${accessToken}`},
       body: JSON.stringify({
         session_id: crypto.randomUUID(),
-        candidate_id: candidateId || "browser-candidate",
-        candidate_name: "Browser candidate",
+        candidate_id: candidateId,
+        candidate_name: candidateName,
         question: "Tell me about your most relevant experience for this role.",
         question_index: 0
       })
@@ -120,6 +146,7 @@ startButton.addEventListener("click", async () => {
     startButton.disabled = false;
   }
 });
+
 async function uploadFrame() {
   if (!sessionId || !camera.videoWidth) return;
   const canvas = document.createElement("canvas");
@@ -134,6 +161,7 @@ async function uploadFrame() {
     body: blob
   });
 }
+
 document.querySelector("#submit-answer").addEventListener("click", async () => {
   if (!sessionId || !answer.value.trim()) return;
   const response = await fetch(`/api/v1/interviews/${sessionId}`, {
@@ -148,6 +176,7 @@ document.querySelector("#submit-answer").addEventListener("click", async () => {
   message.textContent = "Answer shared with the interviewer.";
   answer.value = "";
 });
+
 load().catch(() => { message.textContent = "Unable to reach the InterviewIQ service."; });
 </script>
 </body>

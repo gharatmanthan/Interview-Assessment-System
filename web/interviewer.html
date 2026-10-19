@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>InterviewIQ Interviewer Monitor</title>
+  <style>
+    body { margin: 0; font: 16px system-ui, sans-serif; background: #f4f7fb; color: #172033; }
+    main { max-width: 1100px; margin: 4vh auto; padding: 28px; }
+    .card { background: white; border-radius: 14px; padding: 22px; box-shadow: 0 8px 30px #17203312; }
+    .grid { display: grid; grid-template-columns: 260px 1fr; gap: 18px; }
+    input, textarea { box-sizing: border-box; width: 100%; padding: 11px; margin-top: 7px; border: 1px solid #cbd5e1; border-radius: 8px; }
+    label { display: block; margin-top: 14px; font-weight: 600; }
+    button { padding: 10px 15px; margin-top: 16px; border: 0; border-radius: 8px; background: #2563eb; color: white; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .6; } ul { padding: 0; list-style: none; } li { padding: 12px; border-bottom: 1px solid #e2e8f0; cursor: pointer; }
+    li.selected { background: #eff6ff; } video { width: 100%; max-height: 420px; object-fit: contain; background: #111827; border-radius: 10px; }
+    .event { padding: 10px; border-left: 4px solid #ef4444; background: #fef2f2; margin: 8px 0; }
+    .muted { color: #64748b; } #monitor { display: none; } #message { margin-top: 14px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>InterviewIQ Interviewer Monitor</h1>
+  <section id="login" class="card">
+    <label>Interviewer ID<input id="identity" autocomplete="username"></label>
+    <label>Password<input id="password" type="password" autocomplete="current-password"></label>
+    <button id="login-button">Sign in</button>
+  </section>
+  <section id="monitor">
+    <div class="grid">
+      <aside class="card"><h2>Live candidates</h2><ul id="sessions"></ul></aside>
+      <section class="card">
+        <h2 id="candidate">Select a candidate</h2>
+        <img id="frame" alt="Latest candidate camera frame" hidden>
+        <p id="question" class="muted"></p>
+        <h3>Latest answer</h3><p id="transcript" class="muted">No answer submitted.</p>
+        <h3>Integrity review</h3><div id="events" class="muted">Select a live candidate.</div>
+      </section>
+    </div>
+  </section>
+  <p id="message"></p>
+</main>
+<script>
+const login = document.querySelector("#login");
+const monitor = document.querySelector("#monitor");
+const message = document.querySelector("#message");
+const sessionsList = document.querySelector("#sessions");
+const frame = document.querySelector("#frame");
+const candidate = document.querySelector("#candidate");
+const question = document.querySelector("#question");
+const transcript = document.querySelector("#transcript");
+const events = document.querySelector("#events");
+let accessToken = localStorage.getItem("interviewiq_interviewer_token");
+let sessions = [];
+let selectedSession;
+let refreshTimer;
+
+function authHeaders(extra = {}) {
+  return {...extra, Authorization: `Bearer ${accessToken}`};
+}
+
+async function loginInterviewer() {
+  const response = await fetch("/api/v1/auth/interviewer", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      identity: document.querySelector("#identity").value.trim(),
+      password: document.querySelector("#password").value
+    })
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.detail || "Sign in failed.");
+  accessToken = result.access_token;
+  localStorage.setItem("interviewiq_interviewer_token", accessToken);
+  login.style.display = "none";
+  monitor.style.display = "block";
+  await refresh();
+  refreshTimer = setInterval(refresh, 2000);
+}
+
+async function refresh() {
+  const response = await fetch("/api/v1/interviews", {headers: authHeaders()});
+  if (!response.ok) throw new Error("Could not load live interviews.");
+  sessions = await response.json();
+  sessionsList.replaceChildren();
+  sessions.forEach(item => {
+    const li = document.createElement("li");
+    li.textContent = `${item.candidate_name} — Q${item.question_index + 1}`;
+    li.className = item.session_id === selectedSession ? "selected" : "";
+    li.onclick = () => { selectedSession = item.session_id; refresh(); };
+    sessionsList.appendChild(li);
+  });
+  if (!selectedSession && sessions.length) selectedSession = sessions[0].session_id;
+  const current = sessions.find(item => item.session_id === selectedSession);
+  if (!current) return;
+  candidate.textContent = current.candidate_name;
+  question.textContent = current.question;
+  transcript.textContent = current.transcript || "No answer submitted.";
+  await refreshFrame(current.session_id);
+  await refreshEvents(current.session_id);
+}
+
+async function refreshFrame(id) {
+  const response = await fetch(`/api/v1/interviews/${id}/frame`, {headers: authHeaders()});
+  if (!response.ok) return;
+  frame.src = URL.createObjectURL(await response.blob());
+  frame.hidden = false;
+}
+
+async function refreshEvents(id) {
+  const response = await fetch(`/api/v1/interviews/${id}/integrity-flags`, {headers: authHeaders()});
+  if (!response.ok) return;
+  const list = await response.json();
+  events.replaceChildren();
+  if (!list.length) { events.textContent = "No integrity events recorded."; return; }
+  list.forEach(item => {
+    const div = document.createElement("div");
+    div.className = "event";
+    div.textContent = `[${item.review_status.toUpperCase()}] ${item.severity.toUpperCase()} — ${item.detail} (${Math.round(item.confidence * 100)}%)`;
+    if (item.review_status === "open") {
+      const button = document.createElement("button");
+      button.textContent = "Mark reviewed";
+      button.onclick = async () => {
+        await fetch(`/api/v1/interviews/${id}/integrity-flags/${item.id}`, {
+          method: "PATCH", headers: authHeaders({"Content-Type": "application/json"}),
+          body: JSON.stringify({status: "reviewed", note: "Reviewed in browser monitor."})
+        });
+        await refreshEvents(id);
+      };
+      div.appendChild(button);
+    }
+    events.appendChild(div);
+  });
+}
+
+document.querySelector("#login-button").onclick = () =>
+  loginInterviewer().catch(error => { message.textContent = error.message; });
+if (accessToken) {
+  login.style.display = "none";
+  monitor.style.display = "block";
+  refresh().catch(() => {
+    localStorage.removeItem("interviewiq_interviewer_token");
+    login.style.display = "block";
+    monitor.style.display = "none";
+  });
+}
+</script>
+</body>
+</html>
