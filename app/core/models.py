@@ -38,6 +38,7 @@ class CompetencyScore:
     category: str            # e.g. "DSA", "System Design", "Communication"
     score: float              # 0-100
     confidence: float = 0.0   # model's confidence in this score, 0-1
+    evaluation_source: str = "heuristic"
 
 
 @dataclass
@@ -50,6 +51,7 @@ class ExplanationItem:
     question_id: str
     summary: str              # 1-2 sentence plain-language rationale
     supporting_phrases: list = field(default_factory=list)  # phrases from transcript that drove the score
+    evaluation_source: str = "heuristic"
 
 
 @dataclass

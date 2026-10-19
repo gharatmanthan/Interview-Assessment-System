@@ -340,14 +340,19 @@ class InterviewPage(QWidget):
                         db.save_competency_score(score)
                         db.save_explanation(explanation)
                         score_value = score.score
+                        source_label = (
+                            "Groq" if score.evaluation_source == "groq" else "heuristic fallback"
+                        )
                         self.record_status.setText(
-                            f"Answer scored: {score.score}/100 (AI certainty: {score.confidence:.0%}; "
+                            f"Answer scored: {score.score}/100 ({source_label}; certainty: {score.confidence:.0%}; "
                             f"your confidence: {self.confidence_slider.value()}/5). "
                             "Generating next question..."
                         )
                         self.record_status.setStyleSheet("color: #14B8A6; font-weight: 600;")
                     except Exception as eval_err:
-                        self.record_status.setText("Answer recorded. Generating next question...")
+                        self.record_status.setText(
+                            f"Answer recorded; scoring unavailable ({eval_err}). Generating next question..."
+                        )
                         self.record_status.setStyleSheet("color: #14B8A6; font-weight: 600;")
 
                     # Trigger dynamic next question generation

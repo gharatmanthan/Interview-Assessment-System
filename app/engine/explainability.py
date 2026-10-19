@@ -29,6 +29,7 @@ def explain_score(session_id: str, question_id: str, transcript: str,
                    score: float) -> ExplanationItem:
     """Must return: an ExplanationItem (see app/core/models.py)."""
     summary, supporting = None, None
+    evaluation_source = "heuristic"
 
     if llm_client.llm_available():
         try:
@@ -42,7 +43,8 @@ def explain_score(session_id: str, question_id: str, transcript: str,
             raw = llm_client.ask_llm(system, user, json_mode=True)
             data = json.loads(raw)
             summary, supporting = data["summary"], data.get("supporting_phrases", [])
-        except Exception:
+            evaluation_source = "groq"
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError, RuntimeError):
             summary, supporting = None, None
 
     if summary is None:
@@ -53,4 +55,5 @@ def explain_score(session_id: str, question_id: str, transcript: str,
         question_id=question_id,
         summary=summary,
         supporting_phrases=supporting,
+        evaluation_source=evaluation_source,
     )

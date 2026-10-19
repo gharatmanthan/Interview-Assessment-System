@@ -92,6 +92,7 @@ def init_db():
         category TEXT,
         score REAL,
         confidence REAL
+        ,evaluation_source TEXT NOT NULL DEFAULT 'heuristic'
     );
     CREATE TABLE IF NOT EXISTS explanations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,6 +100,7 @@ def init_db():
         question_id TEXT,
         summary TEXT,
         supporting_phrases TEXT
+        ,evaluation_source TEXT NOT NULL DEFAULT 'heuristic'
     );
     CREATE TABLE IF NOT EXISTS fairness_flags (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -167,6 +169,12 @@ def init_db():
     conn.commit()
     # Migrate existing databases that lack the new columns
     existing = {row[1] for row in conn.execute("PRAGMA table_info(live_interviews)").fetchall()}
+    score_columns = {row[1] for row in conn.execute("PRAGMA table_info(competency_scores)").fetchall()}
+    explanation_columns = {row[1] for row in conn.execute("PRAGMA table_info(explanations)").fetchall()}
+    if "evaluation_source" not in score_columns:
+        conn.execute("ALTER TABLE competency_scores ADD COLUMN evaluation_source TEXT NOT NULL DEFAULT 'heuristic'")
+    if "evaluation_source" not in explanation_columns:
+        conn.execute("ALTER TABLE explanations ADD COLUMN evaluation_source TEXT NOT NULL DEFAULT 'heuristic'")
     for col, definition in [
         ("pending_question",  "TEXT NOT NULL DEFAULT ''"),
         ("pending_status",    "TEXT NOT NULL DEFAULT 'none'"),
@@ -340,8 +348,8 @@ def save_integrity_flag(
 def save_competency_score(score):
     conn = get_connection()
     conn.execute(
-        """INSERT INTO competency_scores (session_id, question_id, category, score, confidence)
-        VALUES (:session_id, :question_id, :category, :score, :confidence)""",
+        """        INSERT INTO competency_scores (session_id, question_id, category, score, confidence, evaluation_source)
+        VALUES (:session_id, :question_id, :category, :score, :confidence, :evaluation_source)""",
         asdict(score),
     )
     conn.commit()
@@ -353,8 +361,8 @@ def save_explanation(item):
     d = asdict(item)
     d["supporting_phrases"] = json.dumps(d["supporting_phrases"])
     conn.execute(
-        """INSERT INTO explanations (session_id, question_id, summary, supporting_phrases)
-        VALUES (:session_id, :question_id, :summary, :supporting_phrases)""",
+        """        INSERT INTO explanations (session_id, question_id, summary, supporting_phrases, evaluation_source)
+        VALUES (:session_id, :question_id, :summary, :supporting_phrases, :evaluation_source)""",
         d,
     )
     conn.commit()

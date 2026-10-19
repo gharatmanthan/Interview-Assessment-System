@@ -89,11 +89,16 @@ class ReportsPage(QWidget):
             "Scores:",
         ]
         lines.extend(
-            f"- {score['question_id']}: {score['score']}/100 ({score['confidence']:.0%} confidence)"
+            f"- {score['question_id']}: {score['score']}/100 "
+            f"({score['confidence']:.0%} confidence; {score.get('evaluation_source', 'heuristic')})"
             for score in scores
         )
         lines.append("\nExplanations:")
-        lines.extend(f"- {item['question_id']}: {item['summary']}" for item in explanations)
+        lines.extend(
+            f"- {item['question_id']} ({item.get('evaluation_source', 'heuristic')}): "
+            f"{item['summary']}"
+            for item in explanations
+        )
         lines.append("\nIntegrity flags:")
         lines.extend(f"- {flag['severity'].upper()}: {flag['detail']}" for flag in flags)
         if not flags:

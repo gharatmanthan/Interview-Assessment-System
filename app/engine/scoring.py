@@ -55,6 +55,7 @@ def score_answer(session_id: str, question_id: str, category: str,
                   transcript: str, rubric: dict, question: str = "") -> CompetencyScore:
     """Must return: a CompetencyScore (see app/core/models.py)."""
     score, confidence = None, None
+    evaluation_source = "heuristic"
 
     if llm_client.llm_available():
         try:
@@ -76,7 +77,8 @@ def score_answer(session_id: str, question_id: str, category: str,
             score, confidence = float(data["score"]), float(data.get("confidence", 0.7))
             if not 0 <= score <= 100 or not 0 <= confidence <= 1:
                 raise ValueError("LLM returned an out-of-range score or confidence")
-        except Exception:
+            evaluation_source = "groq"
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError, RuntimeError):
             score, confidence = None, None
 
     if score is None:
@@ -88,4 +90,5 @@ def score_answer(session_id: str, question_id: str, category: str,
         category=category,
         score=round(score, 1),
         confidence=round(confidence, 2),
+        evaluation_source=evaluation_source,
     )
