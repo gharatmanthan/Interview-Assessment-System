@@ -1,5 +1,6 @@
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout, QWidget
+import requests
 
 from app.core import db
 
@@ -93,16 +94,35 @@ class RoleLoginPage(QWidget):
     def _login(self):
         identity = self.identity.text().strip()
         password = self.password.text()
-        if self.role == "candidate":
-            account = db.authenticate_candidate(identity, password)
-        else:
-            account = db.authenticate_interviewer(identity, password)
+        if not identity or not password:
+            self._show_login_error("Enter both your ID and password.")
+            return
+        try:
+            if self.role == "candidate":
+                account = db.authenticate_candidate(identity, password)
+            else:
+                account = db.authenticate_interviewer(identity, password)
+        except (requests.RequestException, RuntimeError, OSError) as error:
+            self._show_login_error(f"Unable to reach the interview service: {error}")
+            return
         if account:
             self.authenticated.emit(account)
             return
-        self.status.setText("That ID and password do not match.")
+
+        if self.role == "interviewer":
+            message = (
+                "Interviewer credentials are configured by the organization. "
+                "Set INTERVIEWER_ID and INTERVIEWER_PASSWORD, or use the values "
+                "supplied by the Render deployment owner."
+            )
+        else:
+            message = "That candidate ID and password do not match."
+        self._show_login_error(message)
+
+    def _show_login_error(self, message):
+        self.status.setText(message)
         self.status.setStyleSheet("color: #C2413A; font-weight: 700;")
-        QMessageBox.warning(self, "Sign in failed", "Please check your credentials and try again.")
+        QMessageBox.warning(self, "Sign in failed", message)
 
 
 CandidateLoginPage = RoleLoginPage

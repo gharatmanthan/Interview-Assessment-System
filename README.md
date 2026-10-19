@@ -52,6 +52,17 @@ Requires a webcam for the interview screen to show a live preview (click "Start 
 If no webcam is available it will show an error message but the rest of the app still works.
 
 The local demo candidate account is `candidate01` with password `interview123`.
+For local interviewer access, set credentials before starting the app:
+
+```powershell
+$env:INTERVIEWER_ID = "interviewer01"
+$env:INTERVIEWER_PASSWORD = "choose-a-local-password"
+python -m app.main --role interviewer
+```
+
+There is no fixed default interviewer password. In shared remote mode, use the
+interviewer ID and password configured in Render as `INTERVIEWER_ID` and
+`INTERVIEWER_PASSWORD`.
 
 ## Start the API locally
 
