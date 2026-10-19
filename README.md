@@ -115,6 +115,18 @@ The API base URL for future desktop/frontend clients will be:
 https://YOUR-SERVICE.onrender.com/api/v1
 ```
 
+The deployed service also serves a candidate registration page at `/`. An
+interviewer creates an invitation through `POST /api/v1/public/invitations`
+with an authenticated interviewer token and a job ID. Share the returned URL:
+
+```text
+https://YOUR-SERVICE.onrender.com/?token=RETURNED_TOKEN
+```
+
+The invitation expires after the requested period (default 72 hours) and can
+be used once. The public page never exposes the invitation token in server
+logs beyond the URL request, so treat the link as confidential.
+
 ## Candidate device-monitoring policy
 
 The native candidate client checks for USB storage, physical serial devices,

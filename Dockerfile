@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements-api.txt
 
 COPY api ./api
 COPY app ./app
+COPY web ./web
 COPY data/settings.json ./data/settings.json
 
 EXPOSE 8000

@@ -68,3 +68,14 @@ class IntegrityFlagRequest(BaseModel):
 class IntegrityReviewRequest(BaseModel):
     status: str = Field(pattern="^(open|reviewed|dismissed)$")
     note: str = Field(default="", max_length=2000)
+
+
+class InvitationRequest(BaseModel):
+    job_id: int = Field(ge=1)
+    expires_in_hours: int = Field(default=72, ge=1, le=720)
+
+
+class PublicRegistrationRequest(BaseModel):
+    full_name: str = Field(min_length=1, max_length=200)
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=8, max_length=256)

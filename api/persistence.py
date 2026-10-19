@@ -11,7 +11,7 @@ from typing import Any, Iterator
 
 import psycopg
 from psycopg.rows import dict_row
-from api.auth import hash_password, verify_password
+from api.auth import hash_invitation_token, hash_password, verify_password
 
 
 SCHEMA = """
@@ -67,6 +67,16 @@ CREATE TABLE IF NOT EXISTS live_interview_frames (
     image BYTEA NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE TABLE IF NOT EXISTS interview_invitations (
+    invitation_id BIGSERIAL PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    job_id BIGINT NOT NULL REFERENCES job_postings(id),
+    created_by TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS interview_invitations_token_idx
+    ON interview_invitations (token_hash);
 """
 
 
@@ -234,6 +244,67 @@ def save_job_posting(title: str, description: str) -> None:
             """,
             (title, description),
         )
+
+
+def create_invitation(token: str, job_id: int, created_by: str, expires_in_hours: int) -> dict:
+    with connection() as conn:
+        return conn.execute(
+            """
+            INSERT INTO interview_invitations
+                (token_hash, job_id, created_by, expires_at)
+            VALUES (%s, %s, %s, NOW() + (%s * INTERVAL '1 hour'))
+            RETURNING invitation_id, job_id, expires_at
+            """,
+            (hash_invitation_token(token), job_id, created_by, expires_in_hours),
+        ).fetchone()
+
+
+def get_public_invitation(token: str) -> dict | None:
+    with connection() as conn:
+        return conn.execute(
+            """
+            SELECT i.invitation_id, i.job_id, i.expires_at, j.title, j.description
+            FROM interview_invitations i
+            JOIN job_postings j ON j.id = i.job_id
+            WHERE i.token_hash = %s AND i.used_at IS NULL
+                AND i.expires_at > NOW() AND j.is_active = TRUE
+            """,
+            (hash_invitation_token(token),),
+        ).fetchone()
+
+
+def register_public_candidate(
+    token: str, full_name: str, email: str, password: str
+) -> dict | None:
+    with connection() as conn:
+        invitation = conn.execute(
+            """
+            SELECT invitation_id, job_id
+            FROM interview_invitations
+            WHERE token_hash = %s AND used_at IS NULL AND expires_at > NOW()
+            FOR UPDATE
+            """,
+            (hash_invitation_token(token),),
+        ).fetchone()
+        if invitation is None:
+            return None
+        candidate_id = email.strip().lower()
+        inserted = conn.execute(
+            """
+            INSERT INTO candidate_accounts (candidate_id, password_hash, full_name)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (candidate_id) DO UPDATE
+                SET full_name = EXCLUDED.full_name,
+                    password_hash = EXCLUDED.password_hash
+            RETURNING candidate_id, full_name
+            """,
+            (candidate_id, hash_password(password), full_name.strip()),
+        ).fetchone()
+        conn.execute(
+            "UPDATE interview_invitations SET used_at = NOW() WHERE invitation_id = %s",
+            (invitation["invitation_id"],),
+        )
+        return {**inserted, "job_id": invitation["job_id"]}
 
 
 def get_live_interviews() -> list[dict]:

@@ -3,11 +3,14 @@ import os
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from pathlib import Path
 
 from api import persistence as db
 from api.routes.interviews import router as interviews_router
 from api.routes.shared_data import router as shared_data_router
 from api.routes.auth import router as auth_router
+from api.routes.public import router as public_router
 
 
 def create_app() -> FastAPI:
@@ -29,6 +32,14 @@ def create_app() -> FastAPI:
     application.include_router(interviews_router, prefix="/api/v1")
     application.include_router(shared_data_router, prefix="/api/v1")
     application.include_router(auth_router, prefix="/api/v1")
+    application.include_router(public_router, prefix="/api/v1")
+    web_index = Path(__file__).parent.parent / "web" / "index.html"
+    application.add_api_route(
+        "/",
+        lambda: FileResponse(web_index),
+        methods=["GET"],
+        include_in_schema=False,
+    )
     return application
 
 
