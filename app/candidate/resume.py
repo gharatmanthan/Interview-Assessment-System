@@ -18,10 +18,18 @@ SECTION_NAMES = {
     "objective": "summary",
     "experience": "experience",
     "work experience": "experience",
+    "professional experience": "experience",
+    "work history": "experience",
     "education": "education",
+    "academic background": "education",
     "projects": "projects",
+    "projects and portfolio": "projects",
+    "projects portfolio": "projects",
+    "selected projects": "projects",
     "certifications": "certifications",
     "skills": "skills",
+    "technical skills": "skills",
+    "core skills": "skills",
 }
 
 
@@ -51,6 +59,7 @@ def _sections(text: str) -> dict:
     current = "summary"
     for line in text.splitlines():
         heading = re.sub(r"[^a-z ]", "", line.lower()).strip()
+        heading = re.sub(r"\s+", " ", heading)
         if heading in SECTION_NAMES:
             current = SECTION_NAMES[heading]
             continue
@@ -98,7 +107,11 @@ def match_resume_to_job(profile: dict, job_title: str, description: str) -> dict
     """Return an explainable keyword match between a profile and job posting."""
     job_text = _normalise(f"{job_title} {description}")
     required_terms = sorted({skill for skill in SKILL_TERMS if _contains_skill(job_text, skill)})
-    profile_skills = set(profile.get("skills", []))
+    profile_skills = {
+        str(skill).strip().lower()
+        for skill in profile.get("skills", [])
+        if str(skill).strip()
+    }
     matched = sorted(profile_skills.intersection(required_terms))
     missing = sorted(set(required_terms).difference(profile_skills))
     score = round((len(matched) / len(required_terms)) * 100, 1) if required_terms else 0.0
