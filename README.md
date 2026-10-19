@@ -135,6 +135,12 @@ Environment checks run at interview start and periodically during a live
 interview. Camera and host checks are performed locally because browser
 JavaScript cannot inspect operating-system processes or hardware reliably.
 
+The live monitor stores only the latest compressed JPEG frame per active
+session in the configured PostgreSQL database. Frames are replaced on upload,
+are not an interview recording, and are deleted automatically when the
+interview session is removed. The media endpoints require the candidate or
+interviewer access token appropriate to the operation.
+
 ## Use two desktop PCs with the shared Render API
 
 The desktop app uses local SQLite by default. To make a candidate PC and an

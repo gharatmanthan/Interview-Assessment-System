@@ -13,7 +13,7 @@ class RemoteApiClient:
     def _request(self, method: str, path: str, **kwargs) -> Any:
         headers = dict(kwargs.pop("headers", {}) or {})
         if self.access_token:
-            headers["Authorization"] = f"Bearer {self.access_token}"
+            headers["Authorization"] = "Bearer " + self.access_token
         if headers:
             kwargs["headers"] = headers
         response = requests.request(
@@ -37,6 +37,20 @@ class RemoteApiClient:
         account = response.json()
         self.access_token = account["access_token"]
         return account
+
+    def _binary_request(self, method: str, path: str, **kwargs) -> bytes:
+        headers = dict(kwargs.pop("headers", {}) or {})
+        if self.access_token:
+            headers["Authorization"] = "Bearer " + self.access_token
+        response = requests.request(
+            method,
+            f"{self.base_url}{path}",
+            timeout=self.timeout,
+            headers=headers,
+            **kwargs,
+        )
+        response.raise_for_status()
+        return response.content
 
     def authenticate_interviewer(self, interviewer_id: str, password: str) -> dict | None:
         return self._login("interviewer", interviewer_id, password)
@@ -72,23 +86,20 @@ class RemoteApiClient:
         return self._request("PATCH", f"/interviews/{session_id}", json=fields)
 
     def upload_frame(self, session_id: str, frame: bytes) -> None:
-        response = requests.put(
-            f"{self.base_url}/interviews/{session_id}/frame",
+        self._binary_request(
+            "PUT",
+            f"/interviews/{session_id}/frame",
             data=frame,
             headers={"Content-Type": "image/jpeg"},
-            timeout=self.timeout,
         )
-        response.raise_for_status()
 
     def download_frame(self, session_id: str) -> bytes | None:
-        response = requests.get(
-            f"{self.base_url}/interviews/{session_id}/frame",
-            timeout=self.timeout,
-        )
-        if response.status_code == 404:
-            return None
-        response.raise_for_status()
-        return response.content
+        try:
+            return self._binary_request("GET", f"/interviews/{session_id}/frame")
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                return None
+            raise
 
     def save_integrity_flag(
         self, session_id: str, flag_type: str, detail: str,

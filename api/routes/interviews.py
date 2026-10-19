@@ -17,7 +17,6 @@ from api.schemas import (
 )
 
 router = APIRouter(prefix="/interviews", tags=["interviews"])
-_frames: dict[str, bytes] = {}
 
 
 def _get_or_404(session_id: str) -> dict:
@@ -57,13 +56,13 @@ async def upload_frame(session_id: str, request: Request, _: dict = Depends(requ
     frame = await request.body()
     if not frame or len(frame) > 400_000:
         raise HTTPException(status_code=400, detail="Invalid or oversized frame.")
-    _frames[session_id] = frame
+    db.save_live_frame(session_id, frame)
 
 
 @router.get("/{session_id}/frame")
 def download_frame(session_id: str, _: dict = Depends(require_role("interviewer"))) -> Response:
     _get_or_404(session_id)
-    frame = _frames.get(session_id)
+    frame = db.get_live_frame(session_id)
     if frame is None:
         raise HTTPException(status_code=404, detail="No camera frame available.")
     return Response(content=frame, media_type="image/jpeg")

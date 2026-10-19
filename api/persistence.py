@@ -62,6 +62,11 @@ CREATE TABLE IF NOT EXISTS integrity_flags (
 );
 CREATE INDEX IF NOT EXISTS integrity_flags_session_timestamp_idx
     ON integrity_flags (session_id, timestamp DESC);
+CREATE TABLE IF NOT EXISTS live_interview_frames (
+    session_id TEXT PRIMARY KEY REFERENCES live_interviews(session_id) ON DELETE CASCADE,
+    image BYTEA NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 """
 
 
@@ -243,6 +248,28 @@ def get_live_interview(session_id: str) -> dict | None:
         return conn.execute(
             "SELECT * FROM live_interviews WHERE session_id = %s", (session_id,)
         ).fetchone()
+
+
+def save_live_frame(session_id: str, image: bytes) -> None:
+    with connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO live_interview_frames (session_id, image)
+            VALUES (%s, %s)
+            ON CONFLICT (session_id) DO UPDATE
+            SET image = EXCLUDED.image, updated_at = NOW()
+            """,
+            (session_id, image),
+        )
+
+
+def get_live_frame(session_id: str) -> bytes | None:
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT image FROM live_interview_frames WHERE session_id = %s",
+            (session_id,),
+        ).fetchone()
+        return bytes(row["image"]) if row else None
 
 
 def start_live_interview(
