@@ -2,11 +2,12 @@
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi import Request
 from fastapi.responses import Response
 
 from api import persistence as db
+from api.dependencies import require_role
 from api.schemas import (
     ApproveQuestionRequest,
     IntegrityFlagRequest,
@@ -26,12 +27,12 @@ def _get_or_404(session_id: str) -> dict:
 
 
 @router.get("")
-def list_live_interviews() -> list[dict]:
+def list_live_interviews(_: dict = Depends(require_role("interviewer"))) -> list[dict]:
     return db.get_live_interviews()
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-def start_interview(payload: StartInterviewRequest) -> dict:
+def start_interview(payload: StartInterviewRequest, _: dict = Depends(require_role("candidate"))) -> dict:
     if db.get_live_interview(payload.session_id) is not None:
         raise HTTPException(status_code=409, detail="Session already exists.")
     db.start_live_interview(
@@ -45,12 +46,12 @@ def start_interview(payload: StartInterviewRequest) -> dict:
 
 
 @router.get("/{session_id}")
-def get_interview(session_id: str) -> dict:
+def get_interview(session_id: str, _: dict = Depends(require_role("interviewer"))) -> dict:
     return _get_or_404(session_id)
 
 
 @router.put("/{session_id}/frame", status_code=status.HTTP_204_NO_CONTENT)
-async def upload_frame(session_id: str, request: Request) -> None:
+async def upload_frame(session_id: str, request: Request, _: dict = Depends(require_role("candidate"))) -> None:
     _get_or_404(session_id)
     frame = await request.body()
     if not frame or len(frame) > 400_000:
@@ -59,7 +60,7 @@ async def upload_frame(session_id: str, request: Request) -> None:
 
 
 @router.get("/{session_id}/frame")
-def download_frame(session_id: str) -> Response:
+def download_frame(session_id: str, _: dict = Depends(require_role("interviewer"))) -> Response:
     _get_or_404(session_id)
     frame = _frames.get(session_id)
     if frame is None:
@@ -69,7 +70,8 @@ def download_frame(session_id: str) -> Response:
 
 @router.post("/{session_id}/integrity-flags", status_code=status.HTTP_201_CREATED)
 def create_integrity_flag(
-    session_id: str, payload: IntegrityFlagRequest
+    session_id: str, payload: IntegrityFlagRequest,
+    _: dict = Depends(require_role("candidate")),
 ) -> dict:
     _get_or_404(session_id)
     flag = db.save_integrity_flag(
@@ -83,13 +85,13 @@ def create_integrity_flag(
 
 
 @router.get("/{session_id}/integrity-flags")
-def list_integrity_flags(session_id: str) -> list[dict]:
+def list_integrity_flags(session_id: str, _: dict = Depends(require_role("interviewer"))) -> list[dict]:
     _get_or_404(session_id)
     return db.get_session_flags(session_id)
 
 
 @router.patch("/{session_id}")
-def update_interview(session_id: str, payload: InterviewUpdateRequest) -> dict:
+def update_interview(session_id: str, payload: InterviewUpdateRequest, _: dict = Depends(require_role("candidate"))) -> dict:
     _get_or_404(session_id)
     fields = payload.database_fields()
     if not fields:
@@ -100,7 +102,8 @@ def update_interview(session_id: str, payload: InterviewUpdateRequest) -> dict:
 
 @router.post("/{session_id}/approve-question")
 def approve_question(
-    session_id: str, payload: ApproveQuestionRequest | None = None
+    session_id: str, payload: ApproveQuestionRequest | None = None,
+    _: dict = Depends(require_role("interviewer")),
 ) -> dict:
     interview = _get_or_404(session_id)
     if interview.get("pending_status") != "pending":

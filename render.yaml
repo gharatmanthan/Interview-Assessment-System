@@ -11,3 +11,11 @@ services:
         sync: false
       - key: DATABASE_URL
         sync: false
+      - key: AUTH_SECRET
+        sync: false
+      - key: INTERVIEWER_ID
+        sync: false
+      - key: INTERVIEWER_PASSWORD
+        sync: false
+      - key: INTERVIEWER_NAME
+        sync: false

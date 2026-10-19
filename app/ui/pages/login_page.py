@@ -96,7 +96,7 @@ class RoleLoginPage(QWidget):
         if self.role == "candidate":
             account = db.authenticate_candidate(identity, password)
         else:
-            account = {"full_name": "Interviewer", "interviewer_id": identity} if identity == "interviewer01" and password == "interview123" else None
+            account = db.authenticate_interviewer(identity, password)
         if account:
             self.authenticated.emit(account)
             return

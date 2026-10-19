@@ -8,8 +8,14 @@ class RemoteApiClient:
     def __init__(self, base_url: str, timeout: float = 5):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.access_token = None
 
     def _request(self, method: str, path: str, **kwargs) -> Any:
+        headers = dict(kwargs.pop("headers", {}) or {})
+        if self.access_token:
+            headers["Authorization"] = f"Bearer {self.access_token}"
+        if headers:
+            kwargs["headers"] = headers
         response = requests.request(
             method,
             f"{self.base_url}{path}",
@@ -18,6 +24,22 @@ class RemoteApiClient:
         )
         response.raise_for_status()
         return response.json() if response.content else None
+
+    def _login(self, role: str, identity: str, password: str) -> dict | None:
+        response = requests.post(
+            f"{self.base_url}/auth/{role}",
+            json={"identity": identity, "password": password},
+            timeout=self.timeout,
+        )
+        if response.status_code == 401:
+            return None
+        response.raise_for_status()
+        account = response.json()
+        self.access_token = account["access_token"]
+        return account
+
+    def authenticate_interviewer(self, interviewer_id: str, password: str) -> dict | None:
+        return self._login("interviewer", interviewer_id, password)
 
     def list_live_interviews(self) -> list[dict]:
         return self._request("GET", "/interviews")
@@ -97,15 +119,7 @@ class RemoteApiClient:
         )
 
     def authenticate_candidate(self, candidate_id: str, password: str) -> dict | None:
-        response = requests.post(
-            f"{self.base_url}/candidates/auth",
-            json={"candidate_id": candidate_id, "password": password},
-            timeout=self.timeout,
-        )
-        if response.status_code == 401:
-            return None
-        response.raise_for_status()
-        return response.json()
+        return self._login("candidate", candidate_id, password)
 
     def get_candidate_accounts(self) -> list[dict]:
         return self._request("GET", "/candidates")

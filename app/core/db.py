@@ -26,6 +26,8 @@ _integrity_upload_executor = ThreadPoolExecutor(
     max_workers=1, thread_name_prefix="integrity-upload"
 )
 logger = logging.getLogger(__name__)
+_remote_client_instance = None
+_remote_client_url = None
 
 
 def _log_background_failure(future):
@@ -35,6 +37,7 @@ def _log_background_failure(future):
 
 
 def _remote_client() -> RemoteApiClient | None:
+    global _remote_client_instance, _remote_client_url
     settings = load_settings()
     backend_mode = os.environ.get(
         "INTERVIEWIQ_BACKEND_MODE", settings.get("backend_mode", "local")
@@ -46,7 +49,10 @@ def _remote_client() -> RemoteApiClient | None:
     ).strip()
     if not base_url:
         raise RuntimeError("Remote backend is enabled but remote API URL is empty.")
-    return RemoteApiClient(base_url)
+    if _remote_client_instance is None or _remote_client_url != base_url:
+        _remote_client_instance = RemoteApiClient(base_url)
+        _remote_client_url = base_url
+    return _remote_client_instance
 
 
 def get_connection():
@@ -201,6 +207,17 @@ def authenticate_candidate(candidate_id, password):
     ).fetchone()
     conn.close()
     return dict(account) if account else None
+
+
+def authenticate_interviewer(interviewer_id, password):
+    remote = _remote_client()
+    if remote:
+        return remote.authenticate_interviewer(interviewer_id, password)
+    expected_id = os.environ.get("INTERVIEWER_ID", "").strip()
+    expected_password = os.environ.get("INTERVIEWER_PASSWORD", "")
+    if expected_id and expected_password and interviewer_id == expected_id and password == expected_password:
+        return {"interviewer_id": interviewer_id, "full_name": os.environ.get("INTERVIEWER_NAME", "Interviewer")}
+    return None
 
 
 def create_candidate_account(candidate_id, password, full_name):

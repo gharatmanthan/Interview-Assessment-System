@@ -11,13 +11,21 @@ from typing import Any, Iterator
 
 import psycopg
 from psycopg.rows import dict_row
+from api.auth import hash_password, verify_password
 
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS candidate_accounts (
     candidate_id TEXT PRIMARY KEY,
-    password TEXT NOT NULL,
+    password TEXT,
+    password_hash TEXT,
     full_name TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS interviewer_accounts (
+    interviewer_id TEXT PRIMARY KEY,
+    password_hash TEXT NOT NULL,
+    full_name TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE
 );
 CREATE TABLE IF NOT EXISTS job_postings (
     id BIGSERIAL PRIMARY KEY,
@@ -71,13 +79,40 @@ def connection() -> Iterator[psycopg.Connection]:
 def init_db() -> None:
     with connection() as conn:
         conn.execute(SCHEMA)
+        conn.execute("ALTER TABLE candidate_accounts ADD COLUMN IF NOT EXISTS password_hash TEXT")
+        conn.execute("ALTER TABLE candidate_accounts ALTER COLUMN password DROP NOT NULL")
+        legacy = conn.execute(
+            "SELECT candidate_id, password FROM candidate_accounts "
+            "WHERE password_hash IS NULL AND password IS NOT NULL"
+        ).fetchall()
+        for account in legacy:
+            conn.execute(
+                "UPDATE candidate_accounts SET password_hash = %s, password = NULL "
+                "WHERE candidate_id = %s",
+                (hash_password(account["password"]), account["candidate_id"]),
+            )
+        interviewer_id = os.getenv("INTERVIEWER_ID", "").strip()
+        interviewer_password = os.getenv("INTERVIEWER_PASSWORD", "")
+        if interviewer_id and interviewer_password:
+            conn.execute(
+                """
+                INSERT INTO interviewer_accounts (interviewer_id, password_hash, full_name)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (interviewer_id) DO NOTHING
+                """,
+                (
+                    interviewer_id,
+                    hash_password(interviewer_password),
+                    os.getenv("INTERVIEWER_NAME", "Interviewer").strip() or "Interviewer",
+                ),
+            )
         conn.execute(
             """
-            INSERT INTO candidate_accounts (candidate_id, password, full_name)
+            INSERT INTO candidate_accounts (candidate_id, password_hash, full_name)
             VALUES (%s, %s, %s)
             ON CONFLICT (candidate_id) DO NOTHING
             """,
-            ("candidate01", "interview123", "Demo Candidate"),
+            ("candidate01", hash_password("interview123"), "Demo Candidate"),
         )
         for title, description in (
             (
@@ -115,25 +150,40 @@ def create_candidate_account(candidate_id: str, password: str, full_name: str) -
     with connection() as conn:
         result = conn.execute(
             """
-            INSERT INTO candidate_accounts (candidate_id, password, full_name)
+            INSERT INTO candidate_accounts (candidate_id, password_hash, full_name)
             VALUES (%s, %s, %s)
             ON CONFLICT (candidate_id) DO NOTHING
             """,
-            (candidate_id, password, full_name),
+            (candidate_id, hash_password(password), full_name),
         )
         return result.rowcount == 1
 
 
 def authenticate_candidate(candidate_id: str, password: str) -> dict | None:
     with connection() as conn:
-        return conn.execute(
-            """
-            SELECT candidate_id, full_name
-            FROM candidate_accounts
-            WHERE candidate_id = %s AND password = %s
-            """,
-            (candidate_id, password),
+        account = conn.execute(
+            "SELECT candidate_id, full_name, password_hash FROM candidate_accounts "
+            "WHERE candidate_id = %s",
+            (candidate_id,),
         ).fetchone()
+        if account and verify_password(password, account["password_hash"] or ""):
+            return {"candidate_id": account["candidate_id"], "full_name": account["full_name"]}
+        return None
+
+
+def authenticate_interviewer(interviewer_id: str, password: str) -> dict | None:
+    with connection() as conn:
+        account = conn.execute(
+            "SELECT interviewer_id, full_name, password_hash FROM interviewer_accounts "
+            "WHERE interviewer_id = %s AND is_active = TRUE",
+            (interviewer_id,),
+        ).fetchone()
+        if account and verify_password(password, account["password_hash"]):
+            return {
+                "interviewer_id": account["interviewer_id"],
+                "full_name": account["full_name"],
+            }
+        return None
 
 
 def get_active_job_postings() -> list[dict]:

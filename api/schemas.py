@@ -43,6 +43,11 @@ class CandidateAccountRequest(CandidateCredentials):
     full_name: str = Field(min_length=1, max_length=200)
 
 
+class LoginRequest(BaseModel):
+    identity: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=256)
+
+
 class JobPostingRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str = Field(min_length=1, max_length=10000)

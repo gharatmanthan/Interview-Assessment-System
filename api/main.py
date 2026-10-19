@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api import persistence as db
 from api.routes.interviews import router as interviews_router
 from api.routes.shared_data import router as shared_data_router
+from api.routes.auth import router as auth_router
 
 
 def create_app() -> FastAPI:
@@ -27,6 +28,7 @@ def create_app() -> FastAPI:
     )
     application.include_router(interviews_router, prefix="/api/v1")
     application.include_router(shared_data_router, prefix="/api/v1")
+    application.include_router(auth_router, prefix="/api/v1")
     return application
 
 
@@ -35,8 +37,11 @@ app = create_app()
 
 @app.on_event("startup")
 def initialize_database() -> None:
-    if os.getenv("DATABASE_URL", "").strip():
-        db.init_db()
+    if not os.getenv("DATABASE_URL", "").strip():
+        return
+    if not os.getenv("AUTH_SECRET", "").strip():
+        raise RuntimeError("AUTH_SECRET must be configured before starting the API.")
+    db.init_db()
 
 
 @app.get("/health", tags=["system"])

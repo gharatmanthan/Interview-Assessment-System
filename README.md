@@ -97,7 +97,11 @@ when remote mode is disabled.
 6. Set `DATABASE_URL` to the pooled connection string from Neon. Keep it as a
    Render secret and use the `postgresql://` or `postgres://` URL provided by
    Neon.
-7. After deployment, verify:
+7. Set `AUTH_SECRET` to a long random value. Also set `INTERVIEWER_ID`,
+   `INTERVIEWER_PASSWORD`, and optionally `INTERVIEWER_NAME`. These values
+   create the initial interviewer account on first startup; never use the old
+   demo credentials.
+8. After deployment, verify:
 
 ```text
 https://YOUR-SERVICE.onrender.com/health
