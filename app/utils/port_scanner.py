@@ -2,6 +2,16 @@ import subprocess
 import socket
 import serial.tools.list_ports
 import os
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class DeviceObservation:
+    kind: str
+    name: str
+    detail: str
+    severity: str
+    confidence: float
 
 
 def scan_ports(host="127.0.0.1", start_port=1, end_port=1024, timeout=0.08):
@@ -17,38 +27,35 @@ def scan_ports(host="127.0.0.1", start_port=1, end_port=1024, timeout=0.08):
                 open_ports.append(port)
     return open_ports
 
-def get_unauthorized_devices():
-    """
-    Scans for USB storage drives and external hardware ports.
-    Returns a list of detected device descriptions.
-    """
-    unauthorized_devices = []
-    
-    # 1. Detect USB Storage Drives using Windows WMI (Highly accurate)
+def scan_external_devices() -> list[DeviceObservation]:
+    """Return external-device observations after applying safe local allowlists."""
+    observations = []
+
     try:
-        # Query Windows specifically for drives connected via a USB interface
         cmd = [
-            'powershell', 
+            "powershell",
             '-NoProfile', 
             '-Command', 
             "Get-WmiObject Win32_DiskDrive | Where-Object { $_.InterfaceType -eq 'USB' } | Select-Object -ExpandProperty Model"
         ]
-        
-        # 0x08000000 is CREATE_NO_WINDOW on Windows. 
-        # This prevents a black terminal window from flashing when the UI button is clicked.
         creation_flags = 0x08000000 if os.name == 'nt' else 0
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, creationflags=creation_flags)
-        
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, creationflags=creation_flags,
+            check=False, timeout=5,
+        )
         if result.stdout:
-            # Read the output line by line and add detected devices
             devices = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
             for device in devices:
-                unauthorized_devices.append(f"USB Storage: {device}")
-    except Exception as e:
-        print(f"Error checking USB drives: {e}")
-        
-    # 2. Detect External Serial/Hardware Ports (e.g., Arduinos, Debuggers)
+                observations.append(DeviceObservation(
+                    kind="usb_storage",
+                    name=device,
+                    detail=f"USB storage device detected: {device}",
+                    severity="high",
+                    confidence=0.98,
+                ))
+    except (OSError, subprocess.SubprocessError):
+        pass
+
     try:
         ports = serial.tools.list_ports.comports()
         for port in ports:
@@ -56,8 +63,28 @@ def get_unauthorized_devices():
             hwid = (port.hwid or "").lower()
             if "bluetooth" in description or "bthenum" in hwid:
                 continue
-            unauthorized_devices.append(f"Serial Device: {port.device} ({port.description})")
-    except Exception as e:
-        print(f"Error checking Serial ports: {e}")
-        
-    return unauthorized_devices
+            display_name = port.description or "Unknown serial device"
+            allowlisted = os.getenv("INTERVIEWIQ_ALLOWED_SERIAL", "")
+            allowed_markers = {
+                marker.strip().lower()
+                for marker in allowlisted.split(",")
+                if marker.strip()
+            }
+            if any(marker in f"{port.device} {description} {hwid}" for marker in allowed_markers):
+                continue
+            observations.append(DeviceObservation(
+                kind="serial_device",
+                name=display_name,
+                detail=f"External serial device detected on {port.device}: {display_name}",
+                severity="medium",
+                confidence=0.9,
+            ))
+    except (OSError, serial.SerialException):
+        pass
+
+    return observations
+
+
+def get_unauthorized_devices() -> list[str]:
+    """Backward-compatible display strings for the candidate setup screen."""
+    return [observation.detail for observation in scan_external_devices()]

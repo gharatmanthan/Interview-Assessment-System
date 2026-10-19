@@ -115,6 +115,26 @@ The API base URL for future desktop/frontend clients will be:
 https://YOUR-SERVICE.onrender.com/api/v1
 ```
 
+## Candidate device-monitoring policy
+
+The native candidate client checks for USB storage, physical serial devices,
+known remote-access processes, and known remote-access ports. These checks
+produce review signals; they do not prove misconduct or automatically reject a
+candidate. Bluetooth virtual COM ports are ignored because they are commonly
+created by normal operating-system pairing.
+
+If an organization has an approved serial device that should not be reported,
+set this variable on the candidate PC as a comma-separated list of matching
+device markers:
+
+```powershell
+$env:INTERVIEWIQ_ALLOWED_SERIAL = "Approved Reader,COM7"
+```
+
+Environment checks run at interview start and periodically during a live
+interview. Camera and host checks are performed locally because browser
+JavaScript cannot inspect operating-system processes or hardware reliably.
+
 ## Use two desktop PCs with the shared Render API
 
 The desktop app uses local SQLite by default. To make a candidate PC and an

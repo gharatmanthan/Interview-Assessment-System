@@ -3,6 +3,7 @@ from uuid import uuid4
 from datetime import datetime
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import sounddevice as sd
@@ -19,7 +20,7 @@ from app.core.question_bank import DEFAULT_QUESTIONS, questions_for_job
 from app.core.models import InterviewSession
 from app.core import db
 from app.candidate.face_recognition import face_match_confidence
-from app.candidate.integrity import FaceIntegrityMonitor, run_checks
+from app.candidate.integrity import EnvironmentIntegrityMonitor, FaceIntegrityMonitor, run_checks
 from app.engine.explainability import explain_score
 from app.engine.rag import retrieve_rubric
 from app.engine.scoring import score_answer
@@ -107,6 +108,12 @@ class InterviewPage(QWidget):
         self.frame_count = 0
         self.active_integrity_flags = set()
         self.face_monitor = FaceIntegrityMonitor()
+        self.environment_monitor = EnvironmentIntegrityMonitor()
+        self._environment_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="environment-check"
+        )
+        self._environment_future = None
+        self._environment_ticks = 0
         self.session_finished = False
 
         root = QVBoxLayout(self)
@@ -421,6 +428,7 @@ class InterviewPage(QWidget):
             0,
         )
         self._record_integrity_flags(run_checks(self.session_id))
+        self._environment_ticks = 0
         self.live_timer.start(1000)
 
     def _display_current_question(self):
@@ -528,6 +536,12 @@ class InterviewPage(QWidget):
     def _sync_live_state(self):
         if not self.session_id:
             return
+        self._environment_ticks += 1
+        if self._environment_ticks % 15 == 0 and self._environment_future is None:
+            self._environment_future = self._environment_executor.submit(
+                self.environment_monitor.observe, self.session_id
+            )
+            QTimer.singleShot(50, self._apply_environment_check)
         live_session = db.get_live_interview(self.session_id)
         if not live_session:
             return
@@ -554,6 +568,20 @@ class InterviewPage(QWidget):
             self.transcript_box.clear()
             self.record_status.setText("Interviewer sent a follow-up question.")
             self.record_status.setStyleSheet("color: #5B5FEF; font-weight: 600;")
+
+    def _apply_environment_check(self):
+        if self._environment_future is None:
+            return
+        if not self._environment_future.done():
+            QTimer.singleShot(50, self._apply_environment_check)
+            return
+        future = self._environment_future
+        self._environment_future = None
+        try:
+            self._record_integrity_flags(future.result())
+        except Exception as exc:
+            self.record_status.setText(f"Environment monitoring unavailable: {exc}")
+            self.record_status.setStyleSheet("color: #F59E0B; font-weight: 600;")
 
     def _toggle_camera(self):
         if self.timer.isActive():

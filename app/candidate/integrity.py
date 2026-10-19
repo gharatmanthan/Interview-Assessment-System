@@ -18,7 +18,7 @@ from time import monotonic
 
 from app.core.models import IntegrityFlag
 from app.candidate.face_recognition import face_match_confidence, detect_faces
-from app.utils.port_scanner import get_unauthorized_devices
+from app.utils.port_scanner import scan_external_devices
 
 REMOTE_ACCESS_PORTS = {
     3389: "RDP",
@@ -109,6 +109,25 @@ class FaceIntegrityMonitor:
         )]
 
 
+class EnvironmentIntegrityMonitor:
+    """Rate-limits host checks while allowing newly connected devices to surface."""
+
+    def __init__(self, cooldown_seconds: float = 30.0):
+        self.cooldown_seconds = cooldown_seconds
+        self._last_emitted: dict[tuple[str, str, str], float] = {}
+
+    def observe(self, session_id: str) -> list[IntegrityFlag]:
+        now = monotonic()
+        emitted = []
+        for flag in run_checks(session_id):
+            key = (flag.flag_type, flag.detail, flag.severity)
+            if now - self._last_emitted.get(key, 0) < self.cooldown_seconds:
+                continue
+            self._last_emitted[key] = now
+            emitted.append(flag)
+        return emitted
+
+
 def frame_checks(session_id: str, frame, candidate_id: str = "") -> list:
     """Backward-compatible one-frame checks for callers outside the live UI."""
     face_count, matched, confidence, message = face_match_confidence(candidate_id, frame)
@@ -134,6 +153,7 @@ def run_checks(session_id: str) -> list:
                 flag_type="remote_access_port",
                 detail=f"{tool} port {port} is open",
                 severity="high",
+                confidence=0.95,
             )
         )
     for process_name, tool in process_scan():
@@ -143,15 +163,17 @@ def run_checks(session_id: str) -> list:
                 flag_type="remote_access_process",
                 detail=f"{tool} process detected ({process_name})",
                 severity="high",
+                confidence=0.9,
             )
         )
-    for device in get_unauthorized_devices():
+    for device in scan_external_devices():
         flags.append(
             IntegrityFlag(
                 session_id=session_id,
-                flag_type="external_device",
-                detail=device,
-                severity="medium",
+                flag_type=device.kind,
+                detail=device.detail,
+                severity=device.severity,
+                confidence=device.confidence,
             )
         )
     return flags
