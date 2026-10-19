@@ -127,6 +127,13 @@ The invitation expires after the requested period (default 72 hours) and can
 be used once. The public page never exposes the invitation token in server
 logs beyond the URL request, so treat the link as confidential.
 
+After registration, the page can start a browser interview, request camera
+permission, publish the latest compressed preview frame, and share a typed
+answer with the interviewer monitor. Browser mode cannot inspect running
+processes or connected USB devices; use the native candidate client when
+those host-integrity checks are required. Camera and device inspection require
+candidate consent.
+
 ## Candidate device-monitoring policy
 
 The native candidate client checks for USB storage, physical serial devices,

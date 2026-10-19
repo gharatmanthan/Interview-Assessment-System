@@ -23,20 +23,57 @@
     <label>Password<input name="password" type="password" required minlength="8"></label>
     <button>Register and continue</button>
   </form>
+  <section id="interview" hidden>
+    <p id="candidate-status" class="muted"></p>
+    <button id="start" type="button">Start interview</button>
+    <div id="live" hidden>
+      <video id="camera" autoplay muted playsinline></video>
+      <p id="question"></p>
+      <textarea id="answer" rows="6" placeholder="Type your answer here..."></textarea>
+      <button id="submit-answer" type="button">Submit answer</button>
+    </div>
+  </section>
   <p id="message"></p>
 </main>
 <script>
 const token = new URLSearchParams(location.search).get("token");
 const message = document.querySelector("#message");
 const form = document.querySelector("#registration");
+const interview = document.querySelector("#interview");
+const startButton = document.querySelector("#start");
+const live = document.querySelector("#live");
+const camera = document.querySelector("#camera");
+const question = document.querySelector("#question");
+const answer = document.querySelector("#answer");
+let invitation;
+let accessToken = localStorage.getItem("interviewiq_access_token");
+let sessionId;
+let candidateId;
+let stream;
+let frameTimer;
 const api = "/api/v1/public/invitations/";
+function tokenSubject(value) {
+  try {
+    const payload = value.split(".")[0].replace(/-/g, "+").replace(/_/g, "/");
+    return JSON.parse(atob(payload)).sub;
+  } catch (_) {
+    return null;
+  }
+}
+candidateId = tokenSubject(accessToken);
 async function load() {
   if (!token) { message.textContent = "This page requires an invitation token."; return; }
   const response = await fetch(api + encodeURIComponent(token));
   if (!response.ok) { message.textContent = "This invitation is invalid or expired."; return; }
-  const invitation = await response.json();
+  invitation = await response.json();
   document.querySelector("#job").textContent = `Interview for ${invitation.title}`;
-  form.hidden = false;
+  if (accessToken) {
+    interview.hidden = false;
+    document.querySelector("#candidate-status").textContent =
+      "Your registration is ready. Start when you are prepared.";
+  } else {
+    form.hidden = false;
+  }
 }
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -47,8 +84,69 @@ form.addEventListener("submit", async (event) => {
   const result = await response.json();
   if (!response.ok) { message.textContent = result.detail || "Registration failed."; return; }
   localStorage.setItem("interviewiq_access_token", result.access_token);
+  accessToken = result.access_token;
+  candidateId = result.candidate_id;
   message.textContent = "Registration complete. Candidate interview access is ready.";
   form.hidden = true;
+  interview.hidden = false;
+  document.querySelector("#candidate-status").textContent =
+    "Registration complete. Start when you are prepared.";
+});
+startButton.addEventListener("click", async () => {
+  startButton.disabled = true;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({video: true, audio: false});
+    camera.srcObject = stream;
+    const response = await fetch("/api/v1/interviews", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "Authorization": `Bearer ${accessToken}`},
+      body: JSON.stringify({
+        session_id: crypto.randomUUID(),
+        candidate_id: candidateId || "browser-candidate",
+        candidate_name: "Browser candidate",
+        question: "Tell me about your most relevant experience for this role.",
+        question_index: 0
+      })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || "Could not start interview.");
+    sessionId = result.session_id;
+    question.textContent = result.question;
+    live.hidden = false;
+    startButton.hidden = true;
+    frameTimer = setInterval(uploadFrame, 2000);
+  } catch (error) {
+    message.textContent = error.message || "Camera permission is required.";
+    startButton.disabled = false;
+  }
+});
+async function uploadFrame() {
+  if (!sessionId || !camera.videoWidth) return;
+  const canvas = document.createElement("canvas");
+  canvas.width = camera.videoWidth;
+  canvas.height = camera.videoHeight;
+  canvas.getContext("2d").drawImage(camera, 0, 0);
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.65));
+  if (!blob) return;
+  await fetch(`/api/v1/interviews/${sessionId}/frame`, {
+    method: "PUT",
+    headers: {"Authorization": `Bearer ${accessToken}`, "Content-Type": "image/jpeg"},
+    body: blob
+  });
+}
+document.querySelector("#submit-answer").addEventListener("click", async () => {
+  if (!sessionId || !answer.value.trim()) return;
+  const response = await fetch(`/api/v1/interviews/${sessionId}`, {
+    method: "PATCH",
+    headers: {"Content-Type": "application/json", "Authorization": `Bearer ${accessToken}`},
+    body: JSON.stringify({transcript: answer.value.trim()})
+  });
+  if (!response.ok) {
+    message.textContent = "Your answer could not be shared with the interviewer.";
+    return;
+  }
+  message.textContent = "Answer shared with the interviewer.";
+  answer.value = "";
 });
 load().catch(() => { message.textContent = "Unable to reach the InterviewIQ service."; });
 </script>
