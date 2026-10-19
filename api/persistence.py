@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS integrity_flags (
     flag_type TEXT NOT NULL,
     detail TEXT NOT NULL,
     severity TEXT NOT NULL,
+    confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
     timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS integrity_flags_session_timestamp_idx
@@ -79,6 +80,10 @@ def connection() -> Iterator[psycopg.Connection]:
 def init_db() -> None:
     with connection() as conn:
         conn.execute(SCHEMA)
+        conn.execute(
+            "ALTER TABLE integrity_flags ADD COLUMN IF NOT EXISTS confidence "
+            "DOUBLE PRECISION NOT NULL DEFAULT 0"
+        )
         conn.execute("ALTER TABLE candidate_accounts ADD COLUMN IF NOT EXISTS password_hash TEXT")
         conn.execute("ALTER TABLE candidate_accounts ALTER COLUMN password DROP NOT NULL")
         legacy = conn.execute(
@@ -281,17 +286,18 @@ def save_integrity_flag(
     flag_type: str,
     detail: str,
     severity: str,
+    confidence: float,
     timestamp: str,
 ) -> dict:
     with connection() as conn:
         return conn.execute(
             """
             INSERT INTO integrity_flags
-                (session_id, flag_type, detail, severity, timestamp)
-            VALUES (%s, %s, %s, %s, %s::timestamptz)
-            RETURNING id, session_id, flag_type, detail, severity, timestamp
+                (session_id, flag_type, detail, severity, confidence, timestamp)
+            VALUES (%s, %s, %s, %s, %s, %s::timestamptz)
+            RETURNING id, session_id, flag_type, detail, severity, confidence, timestamp
             """,
-            (session_id, flag_type, detail, severity, timestamp),
+            (session_id, flag_type, detail, severity, confidence, timestamp),
         ).fetchone()
 
 
@@ -299,7 +305,7 @@ def get_session_flags(session_id: str) -> list[dict]:
     with connection() as conn:
         return conn.execute(
             """
-            SELECT id, session_id, flag_type, detail, severity, timestamp
+            SELECT id, session_id, flag_type, detail, severity, confidence, timestamp
             FROM integrity_flags
             WHERE session_id = %s
             ORDER BY timestamp DESC, id DESC

@@ -70,10 +70,36 @@ def verify_enrolled_face(candidate_id, frame):
         enrolled, current, cv2.TM_CCOEFF_NORMED
     )[0, 0])
     difference = cv2.norm(enrolled, current, cv2.NORM_L1) / (160 * 160 * 255)
-    if (correlation == correlation and correlation >= 0.35
-            and difference <= 0.45):
+    if correlation == correlation and correlation >= 0.35 and difference <= 0.45:
         return True, "Candidate face verified."
     return False, "This face does not match the enrolled candidate."
+
+
+def face_match_confidence(candidate_id, frame) -> tuple[int, bool, float, str]:
+    """Return face count, match result, confidence, and reviewer-safe message."""
+    faces = detect_faces(frame)
+    if not faces:
+        return 0, False, 0.0, "No face detected."
+    if len(faces) > 1:
+        return len(faces), False, 1.0, f"{len(faces)} faces detected."
+    profile_path = _profile_path(candidate_id) if candidate_id else None
+    if profile_path is None or not profile_path.is_file():
+        return 1, False, 0.0, "No enrolled face profile is available."
+    enrolled = cv2.imread(str(profile_path), cv2.IMREAD_GRAYSCALE)
+    if enrolled is None:
+        return 1, False, 0.0, "The enrolled face profile could not be read."
+    current = _face_crop(frame, faces[0])
+    correlation = float(cv2.matchTemplate(
+        enrolled, current, cv2.TM_CCOEFF_NORMED
+    )[0, 0])
+    difference = cv2.norm(enrolled, current, cv2.NORM_L1) / (160 * 160 * 255)
+    correlation_score = max(0.0, min(1.0, (correlation + 1.0) / 2.0))
+    difference_score = max(0.0, min(1.0, 1.0 - difference))
+    confidence = round((correlation_score * 0.65) + (difference_score * 0.35), 3)
+    matched = correlation == correlation and correlation >= 0.35 and difference <= 0.45
+    return 1, matched, confidence, (
+        "Candidate face verified." if matched else "Face does not match the enrolled candidate."
+    )
 
 
 def verify_single_face(frame):

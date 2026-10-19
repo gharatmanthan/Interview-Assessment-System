@@ -18,8 +18,8 @@ import cv2
 from app.core.question_bank import DEFAULT_QUESTIONS, questions_for_job
 from app.core.models import InterviewSession
 from app.core import db
-from app.candidate.face_recognition import verify_enrolled_face
-from app.candidate.integrity import frame_checks, run_checks
+from app.candidate.face_recognition import face_match_confidence
+from app.candidate.integrity import FaceIntegrityMonitor, run_checks
 from app.engine.explainability import explain_score
 from app.engine.rag import retrieve_rubric
 from app.engine.scoring import score_answer
@@ -106,6 +106,7 @@ class InterviewPage(QWidget):
         self._nq_worker = None
         self.frame_count = 0
         self.active_integrity_flags = set()
+        self.face_monitor = FaceIntegrityMonitor()
         self.session_finished = False
 
         root = QVBoxLayout(self)
@@ -582,9 +583,13 @@ class InterviewPage(QWidget):
         if not ret:
             return
         self.frame_count += 1
-        if self.session_id and self.frame_count % 30 == 0:
-            self._record_integrity_flags(frame_checks(self.session_id, frame))
-        face_verified, face_message = verify_enrolled_face(self.candidate_id, frame)
+        face_count, face_verified, face_confidence, face_message = face_match_confidence(
+            self.candidate_id, frame
+        )
+        if self.session_id and self.frame_count % 6 == 0:
+            self._record_integrity_flags(
+                self.face_monitor.observe(self.session_id, self.candidate_id, frame)
+            )
         self.integrity_badge.setText(f"Face check: {face_message}")
         if face_verified:
             self.integrity_badge.setObjectName("Badge-clear")

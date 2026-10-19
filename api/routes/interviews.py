@@ -79,6 +79,7 @@ def create_integrity_flag(
         flag_type=payload.flag_type,
         detail=payload.detail,
         severity=payload.severity,
+        confidence=payload.confidence,
         timestamp=payload.timestamp or datetime.now(timezone.utc).isoformat(),
     )
     return flag

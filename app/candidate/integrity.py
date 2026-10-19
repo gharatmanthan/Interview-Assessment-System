@@ -14,9 +14,10 @@ TODO (Member A):
 """
 import socket
 import psutil
+from time import monotonic
 
 from app.core.models import IntegrityFlag
-from app.candidate.face_recognition import detect_faces
+from app.candidate.face_recognition import face_match_confidence, detect_faces
 from app.utils.port_scanner import get_unauthorized_devices
 
 REMOTE_ACCESS_PORTS = {
@@ -62,13 +63,61 @@ def process_scan() -> list:
     return found
 
 
-def frame_checks(session_id: str, frame) -> list:
-    """Return review signals for the current camera frame."""
-    face_count = len(detect_faces(frame))
+class FaceIntegrityMonitor:
+    """Debounces camera signals so transient detection noise is not an event."""
+
+    def __init__(self, required_seconds: float = 2.0, cooldown_seconds: float = 8.0):
+        self.required_seconds = required_seconds
+        self.cooldown_seconds = cooldown_seconds
+        self._started: dict[tuple[str, str], float] = {}
+        self._last_emitted: dict[tuple[str, str], float] = {}
+
+    def observe(self, session_id: str, candidate_id: str, frame) -> list[IntegrityFlag]:
+        face_count, matched, confidence, message = face_match_confidence(candidate_id, frame)
+        signal = None
+        severity = "medium"
+        detail = message
+        if face_count == 0:
+            signal = "no_face"
+            detail = "No face visible in the camera frame."
+        elif face_count > 1:
+            signal = "extra_person"
+            severity = "high"
+            detail = f"{face_count} faces visible in the camera frame."
+        elif not matched:
+            signal = "face_mismatch"
+            severity = "high"
+            detail = "Visible face did not match the enrolled candidate."
+
+        now = monotonic()
+        if signal is None:
+            self._started.clear()
+            return []
+        key = (session_id, signal)
+        self._started.setdefault(key, now)
+        if now - self._started[key] < self.required_seconds:
+            return []
+        if now - self._last_emitted.get(key, 0) < self.cooldown_seconds:
+            return []
+        self._last_emitted[key] = now
+        return [IntegrityFlag(
+            session_id=session_id,
+            flag_type=signal,
+            detail=detail,
+            severity=severity,
+            confidence=confidence,
+        )]
+
+
+def frame_checks(session_id: str, frame, candidate_id: str = "") -> list:
+    """Backward-compatible one-frame checks for callers outside the live UI."""
+    face_count, matched, confidence, message = face_match_confidence(candidate_id, frame)
     if face_count == 0:
-        return [IntegrityFlag(session_id, "no_face", "No face visible in the camera frame", "medium")]
+        return [IntegrityFlag(session_id, "no_face", message, "medium", confidence)]
     if face_count > 1:
-        return [IntegrityFlag(session_id, "extra_person", f"{face_count} faces visible in the camera frame", "high")]
+        return [IntegrityFlag(session_id, "extra_person", message, "high", confidence)]
+    if candidate_id and not matched:
+        return [IntegrityFlag(session_id, "face_mismatch", message, "high", confidence)]
     return []
 
 

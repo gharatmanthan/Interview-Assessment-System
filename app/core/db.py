@@ -82,6 +82,7 @@ def init_db():
         flag_type TEXT,
         detail TEXT,
         severity TEXT,
+        confidence REAL NOT NULL DEFAULT 0,
         timestamp TEXT
     );
     CREATE TABLE IF NOT EXISTS competency_scores (
@@ -171,9 +172,17 @@ def init_db():
         ("pending_status",    "TEXT NOT NULL DEFAULT 'none'"),
         ("question_count",    "INTEGER NOT NULL DEFAULT 0"),
         ("interview_context", "TEXT NOT NULL DEFAULT '[]'"),
+        ("confidence", "REAL NOT NULL DEFAULT 0"),
     ]:
         if col not in existing:
             conn.execute(f"ALTER TABLE live_interviews ADD COLUMN {col} {definition}")
+    integrity_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(integrity_flags)").fetchall()
+    }
+    if "confidence" not in integrity_columns:
+        conn.execute(
+            "ALTER TABLE integrity_flags ADD COLUMN confidence REAL NOT NULL DEFAULT 0"
+        )
     conn.commit()
     conn.close()
 
@@ -306,15 +315,18 @@ def save_integrity_flag(
             values["flag_type"],
             values["detail"],
             values["severity"],
+            values.get("confidence", 0.0),
             event_timestamp,
         )
         upload.add_done_callback(_log_background_failure)
         return None
     conn = get_connection()
     cursor = conn.execute(
-        """INSERT INTO integrity_flags (session_id, flag_type, detail, severity, timestamp)
-        VALUES (:session_id, :flag_type, :detail, :severity, :timestamp)""",
-        {**values, "timestamp": str(values["timestamp"])},
+        """INSERT INTO integrity_flags
+        (session_id, flag_type, detail, severity, confidence, timestamp)
+        VALUES (:session_id, :flag_type, :detail, :severity, :confidence, :timestamp)""",
+        {**values, "confidence": values.get("confidence", 0.0),
+         "timestamp": str(values["timestamp"])},
     )
     conn.commit()
     event_id = cursor.lastrowid

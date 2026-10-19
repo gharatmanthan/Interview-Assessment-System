@@ -23,6 +23,7 @@ class IntegrityFlag:
     flag_type: str          # e.g. "remote_access_port", "vm_detected", "extra_person", "gaze_offscreen"
     detail: str              # human-readable description, e.g. "TeamViewer port 5938 open"
     severity: str = "medium"  # "low" | "medium" | "high"
+    confidence: float = 0.0   # detector confidence, 0-1; review signal, not proof
     timestamp: datetime = field(default_factory=datetime.utcnow)
 
 

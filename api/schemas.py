@@ -61,4 +61,5 @@ class IntegrityFlagRequest(BaseModel):
     flag_type: str = Field(min_length=1, max_length=100)
     detail: str = Field(min_length=1, max_length=2000)
     severity: str = Field(pattern="^(low|medium|high)$")
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     timestamp: str | None = None

@@ -92,7 +92,7 @@ class RemoteApiClient:
 
     def save_integrity_flag(
         self, session_id: str, flag_type: str, detail: str,
-        severity: str, timestamp: str,
+        severity: str, confidence: float, timestamp: str,
     ) -> dict:
         return self._request(
             "POST",
@@ -101,6 +101,7 @@ class RemoteApiClient:
                 "flag_type": flag_type,
                 "detail": detail,
                 "severity": severity,
+                "confidence": confidence,
                 "timestamp": timestamp,
             },
         )

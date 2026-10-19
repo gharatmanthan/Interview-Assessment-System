@@ -424,7 +424,9 @@ class InterviewerInterviewPage(QWidget):
             return
 
         lines = [
-            f"[{flag.get('severity', 'medium').upper()}] {flag.get('detail', 'Unknown signal')}"
+            f"[{flag.get('severity', 'medium').upper()}] "
+            f"{flag.get('detail', 'Unknown signal')} "
+            f"(confidence {float(flag.get('confidence', 0.0)):.0%})"
             for flag in flags
         ]
         self.integrity_flags_label.setText("\n".join(lines))
