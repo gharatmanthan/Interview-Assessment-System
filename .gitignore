@@ -1,6 +1,9 @@
-# Python
+# Python generated files
 __pycache__/
 *.py[cod]
+*$py.class
+
+# Virtual environments
 .venv/
 venv/
 env/
@@ -8,20 +11,23 @@ env/
 .env.*
 !.env.example
 
-# Local runtime data
-data/app.db
-data/live_frames/
-data/recordings/
-data/reports/
-data/uploads/
-data/*.wav
-data/face_profiles/
-
-# Frontend and IDE output
+# JavaScript dependencies and build output
 node_modules/
 .next/
 dist/
 build/
+
+# Local application data
+data/live_frames/
+data/recordings/
+data/reports/
+data/uploads/
+data/app.db
+data/*.wav
+data/face_profiles/
+
+# IDE and OS files
 .vscode/
 .idea/
-*.log
+.DS_Store
+Thumbs.db
