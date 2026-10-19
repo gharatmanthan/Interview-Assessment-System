@@ -41,6 +41,11 @@ def _normalise(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower()).strip()
 
 
+def _contains_skill(text: str, skill: str) -> bool:
+    pattern = rf"(?<![a-z0-9+#.-]){re.escape(skill)}(?![a-z0-9+#.-])"
+    return re.search(pattern, text, re.IGNORECASE) is not None
+
+
 def _sections(text: str) -> dict:
     sections = {name: [] for name in set(SECTION_NAMES.values())}
     current = "summary"
@@ -66,18 +71,24 @@ def extract_resume(path: str) -> dict:
     if not text:
         raise ValueError("The resume did not contain readable text.")
     normalised = _normalise(text)
-    skills = sorted(skill for skill in SKILL_TERMS if skill in normalised)
+    skills = sorted(skill for skill in SKILL_TERMS if _contains_skill(normalised, skill))
     email_match = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", text)
     phone_match = re.search(r"(?:\+?\d[\d ()-]{7,}\d)", text)
     years = [int(value) for value in re.findall(r"\b(\d{1,2})\+?\s+years?", normalised)]
     sections = _sections(text)
+    years_experience = max(years, default=0)
     return {
         "file_name": resume_path.name,
         "name": text.splitlines()[0].strip()[:120],
         "email": email_match.group(0) if email_match else "",
         "phone": phone_match.group(0).strip() if phone_match else "",
         "skills": skills,
-        "years_experience": max(years, default=0),
+        "years_experience": years_experience,
+        "experience_years": years_experience,
+        "experience": sections["experience"],
+        "projects": sections["projects"],
+        "education": sections["education"],
+        "summary": sections["summary"],
         "sections": sections,
         "raw_text": text,
     }
@@ -86,7 +97,7 @@ def extract_resume(path: str) -> dict:
 def match_resume_to_job(profile: dict, job_title: str, description: str) -> dict:
     """Return an explainable keyword match between a profile and job posting."""
     job_text = _normalise(f"{job_title} {description}")
-    required_terms = sorted({skill for skill in SKILL_TERMS if skill in job_text})
+    required_terms = sorted({skill for skill in SKILL_TERMS if _contains_skill(job_text, skill)})
     profile_skills = set(profile.get("skills", []))
     matched = sorted(profile_skills.intersection(required_terms))
     missing = sorted(set(required_terms).difference(profile_skills))
