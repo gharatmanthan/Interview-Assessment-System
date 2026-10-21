@@ -278,8 +278,6 @@ class InterviewerDashboard(QWidget):
         # Auto-refresh every 5 s
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self.refresh)
-        self.refresh_timer.start(5000)
-        self.refresh()
 
     # ------------------------------------------------------------------
 
@@ -295,6 +293,12 @@ class InterviewerDashboard(QWidget):
         self._refresh_stats()
         self._refresh_sessions()
         self._refresh_alerts()
+
+    def start_refreshing(self):
+        """Begin loading remote dashboard data after authentication."""
+        if not self.refresh_timer.isActive():
+            self.refresh_timer.start(5000)
+        self.refresh()
 
     def _refresh_stats(self):
         # Clear old cards

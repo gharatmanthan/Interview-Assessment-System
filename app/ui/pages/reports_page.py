@@ -60,6 +60,9 @@ class ReportsPage(QWidget):
         body.addWidget(report_panel, stretch=3)
 
         layout.addLayout(body, stretch=1)
+
+    def start_refreshing(self):
+        """Load report data after the user has authenticated."""
         self.refresh()
 
     def refresh(self):

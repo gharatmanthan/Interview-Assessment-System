@@ -64,7 +64,17 @@ class CandidatesPage(QWidget):
             QMessageBox.warning(self, "Missing details", "Enter a name, candidate ID, and password.")
             return
 
-        if not db.create_candidate_account(candidate_id, password, full_name):
+        try:
+            created = db.create_candidate_account(candidate_id, password, full_name)
+        except Exception as error:
+            QMessageBox.critical(
+                self,
+                "Could not create candidate",
+                f"The candidate account could not be created:\n{error}",
+            )
+            return
+
+        if not created:
             QMessageBox.warning(self, "ID already exists", "Choose a different candidate ID.")
             return
 

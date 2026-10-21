@@ -22,6 +22,9 @@ from app.core.settings_store import load_settings
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "app.db"
 _frame_upload_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="frame-upload")
 _frame_upload_future = None
+_video_receive_executor = ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="video-receive"
+)
 _integrity_upload_executor = ThreadPoolExecutor(
     max_workers=1, thread_name_prefix="integrity-upload"
 )
@@ -505,12 +508,27 @@ def upload_live_frame(session_id: str, frame: bytes) -> None:
     if remote:
         if _frame_upload_future is None or _frame_upload_future.done():
             _frame_upload_future = _frame_upload_executor.submit(
-                remote.upload_frame, session_id, frame
+                remote.send_video_frame, session_id, frame
             )
         return
     frame_path = Path("data") / "live_frames" / f"{session_id}.jpg"
     frame_path.parent.mkdir(parents=True, exist_ok=True)
     frame_path.write_bytes(frame)
+
+
+def stream_live_video(session_id: str, on_frame) -> None:
+    remote = _remote_client()
+    if remote is None:
+        return
+
+    def receive():
+        try:
+            for frame in remote.receive_video_frames(session_id):
+                on_frame(frame)
+        except Exception as exc:
+            logger.warning("Live video stream ended: %s", exc)
+
+    return _video_receive_executor.submit(receive)
 
 
 def download_live_frame(session_id: str) -> bytes | None:

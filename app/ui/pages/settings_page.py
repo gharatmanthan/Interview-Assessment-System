@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from app.core import settings_store
+from app.core.remote_api import RemoteApiClient
 
 try:
     import cv2
@@ -173,6 +174,14 @@ class SettingsPage(QWidget):
         self.remote_api_input.setText(s.get("remote_api_url", ""))
 
     def _save(self):
+        remote_url = self.remote_api_input.text().strip().rstrip("/")
+        if self.backend_combo.currentData() == "remote" or remote_url:
+            try:
+                remote_url = RemoteApiClient._normalize_base_url(remote_url)
+            except ValueError as error:
+                QMessageBox.warning(self, "Invalid API URL", str(error))
+                self.remote_api_input.setFocus()
+                return
         settings_store.save_settings({
             "camera_index": self.camera_combo.currentData(),
             "mic_device": self.mic_combo.currentData(),
@@ -180,6 +189,6 @@ class SettingsPage(QWidget):
             "llm_api_key": self.api_key_input.text(),
             "export_dir": self.export_dir_input.text(),
             "backend_mode": self.backend_combo.currentData(),
-            "remote_api_url": self.remote_api_input.text().strip().rstrip("/"),
+            "remote_api_url": remote_url,
         })
         QMessageBox.information(self, "Settings saved", "Your settings have been saved.")

@@ -106,6 +106,9 @@ class MainWindow(QMainWindow):
         self.login_page.hide()
         self.pages["dashboard"].set_navigate_callback(self._navigate)
         self.setWindowTitle("InterviewIQ - Interviewer workspace")
+        self.pages["dashboard"].start_refreshing()
+        self.pages["interview"].start_refreshing()
+        self.pages["reports"].start_refreshing()
 
     def _start_candidate_interview(self, job_id: int, questions: list):
         if hasattr(self.pages["dashboard"], "cleanup"):

@@ -9,6 +9,8 @@ The interviewer can:
 """
 import json
 import logging
+import queue
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from PySide6.QtCore import QObject, QThread, Qt, QTimer, Signal
@@ -131,6 +133,10 @@ class InterviewerInterviewPage(QWidget):
         )
         self._frame_future = None
         self._frame_session_id = None
+        self._video_session_id = None
+        self._video_frames = queue.Queue(maxsize=2)
+        self._video_future = None
+        self._video_retry_at = 0.0
         self._session_executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="session-refresh"
         )
@@ -258,7 +264,14 @@ class InterviewerInterviewPage(QWidget):
         # Refresh timer — 1 s
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self.refresh_sessions)
-        self.refresh_timer.start(1500)
+        self.video_timer = QTimer(self)
+        self.video_timer.timeout.connect(self._apply_video_frames)
+        self.video_timer.start(33)
+
+    def start_refreshing(self):
+        """Begin polling remote interview data after authentication."""
+        if not self.refresh_timer.isActive():
+            self.refresh_timer.start(1500)
         self.refresh_sessions()
 
     # ------------------------------------------------------------------
@@ -281,7 +294,12 @@ class InterviewerInterviewPage(QWidget):
         live_sessions = db.get_live_interviews()
         live_candidate_ids = {s["candidate_id"] for s in live_sessions}
         sessions = list(live_sessions)
-        for candidate in db.get_candidate_accounts():
+        try:
+            candidates = db.get_candidate_accounts()
+        except Exception as exc:
+            logger.warning("Could not load ready candidates: %s", exc)
+            candidates = []
+        for candidate in candidates:
             if candidate["candidate_id"] not in live_candidate_ids:
                 sessions.append({
                     "session_id": None,
@@ -325,6 +343,12 @@ class InterviewerInterviewPage(QWidget):
             if key == selected_id:
                 selected_row = row
         self.sessions_list.blockSignals(False)
+        if not sessions:
+            self.sessions_list.addItem("No active interviews yet")
+            self.status_label.setText(
+                "Waiting for the candidate to start an interview. "
+                "Keep this monitor open while they begin."
+            )
 
         if selected_row >= 0:
             self.sessions_list.setCurrentRow(selected_row)
@@ -355,7 +379,15 @@ class InterviewerInterviewPage(QWidget):
 
         # Request the frame outside the Qt UI thread.
         frame_path = session.get("session_id") if is_live else None
-        self._request_frame(frame_path)
+        if frame_path and frame_path != self._video_session_id:
+            self._video_session_id = frame_path
+            self._video_future = db.stream_live_video(
+                frame_path, self._enqueue_video_frame
+            )
+            self._video_retry_at = time.monotonic() + 1.0
+        if not frame_path:
+            self._video_session_id = None
+            self._request_frame(None)
 
         self._refresh_integrity_flags(session.get("session_id") if is_live else None)
 
@@ -372,6 +404,46 @@ class InterviewerInterviewPage(QWidget):
             "Live session. Use the panel above to approve the AI question."
             if is_live else "Candidate is registered and ready."
         )
+
+    def _enqueue_video_frame(self, frame_bytes):
+        try:
+            self._video_frames.put_nowait(frame_bytes)
+        except queue.Full:
+            try:
+                self._video_frames.get_nowait()
+                self._video_frames.put_nowait(frame_bytes)
+            except queue.Empty:
+                pass
+
+    def _apply_video_frames(self):
+        if not self._video_session_id:
+            return
+        if (
+            self._video_future is not None
+            and self._video_future.done()
+            and time.monotonic() >= self._video_retry_at
+        ):
+            self._video_future = db.stream_live_video(
+                self._video_session_id, self._enqueue_video_frame
+            )
+            self._video_retry_at = time.monotonic() + 1.0
+        latest = None
+        try:
+            while True:
+                latest = self._video_frames.get_nowait()
+        except queue.Empty:
+            pass
+        if latest is None:
+            return
+        pixmap = QPixmap()
+        if pixmap.loadFromData(latest, "JPG"):
+            self.video_label.setPixmap(
+                pixmap.scaled(
+                    self.video_label.size(),
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                )
+            )
 
     def _request_frame(self, session_id):
         if not session_id:
@@ -582,6 +654,9 @@ class InterviewerInterviewPage(QWidget):
 
     def cleanup(self):
         self.refresh_timer.stop()
+        self.video_timer.stop()
         self._frame_executor.shutdown(wait=False, cancel_futures=True)
         self._session_executor.shutdown(wait=False, cancel_futures=True)
+        if self._video_future is not None:
+            self._video_future.cancel()
         self._cleanup_regen()

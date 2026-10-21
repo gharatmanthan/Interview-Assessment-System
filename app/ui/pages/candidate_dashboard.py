@@ -250,7 +250,6 @@ class CandidateDashboard(QWidget):
 
         # Initial checks
         self.check_environment()
-        self.load_jobs()
 
     # ------------------------------------------------------------------
     # Public API
@@ -260,6 +259,7 @@ class CandidateDashboard(QWidget):
         self.candidate_id = candidate_id
         self.candidate_name = candidate_name
         self.welcome_lbl.setText(f"Welcome back, {candidate_name}")
+        self.load_jobs()
         self.face_enrolled = has_enrolled_face(candidate_id)
         saved_profile = db.get_candidate_profile(candidate_id)
         if saved_profile:

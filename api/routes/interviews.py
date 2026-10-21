@@ -2,11 +2,12 @@
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi import Request
 from fastapi.responses import Response
 
 from api import persistence as db
+from api.auth import decode_token
 from api.dependencies import require_role
 from api.schemas import (
     ApproveQuestionRequest,
@@ -17,6 +18,14 @@ from api.schemas import (
 )
 
 router = APIRouter(prefix="/interviews", tags=["interviews"])
+_video_viewers: dict[str, set[WebSocket]] = {}
+
+
+def _websocket_user(websocket: WebSocket) -> dict:
+    token = websocket.query_params.get("token", "")
+    if not token:
+        raise ValueError("Missing access token.")
+    return decode_token(token)
 
 
 def _get_or_404(session_id: str) -> dict:
@@ -66,6 +75,53 @@ def download_frame(session_id: str, _: dict = Depends(require_role("interviewer"
     if frame is None:
         raise HTTPException(status_code=404, detail="No camera frame available.")
     return Response(content=frame, media_type="image/jpeg")
+
+
+@router.websocket("/{session_id}/video")
+async def video_stream(session_id: str, websocket: WebSocket) -> None:
+    try:
+        user = _websocket_user(websocket)
+        if db.get_live_interview(session_id) is None:
+            await websocket.close(code=4404)
+            return
+        role = user.get("role")
+        if role not in {"candidate", "interviewer"}:
+            await websocket.close(code=4403)
+            return
+        if role == "candidate" and user.get("sub") != interview["candidate_id"]:
+            await websocket.close(code=4403)
+            return
+    except ValueError:
+        await websocket.close(code=4401)
+        return
+
+    await websocket.accept()
+    if role == "interviewer":
+        viewers = _video_viewers.setdefault(session_id, set())
+        viewers.add(websocket)
+        try:
+            while True:
+                await websocket.receive()
+        except WebSocketDisconnect:
+            pass
+        finally:
+            viewers.discard(websocket)
+            if not viewers:
+                _video_viewers.pop(session_id, None)
+        return
+
+    try:
+        while True:
+            frame = await websocket.receive_bytes()
+            if not frame or len(frame) > 400_000:
+                continue
+            for viewer in tuple(_video_viewers.get(session_id, ())):
+                try:
+                    await viewer.send_bytes(frame)
+                except (WebSocketDisconnect, RuntimeError):
+                    _video_viewers.get(session_id, set()).discard(viewer)
+    except WebSocketDisconnect:
+        return
 
 
 @router.post("/{session_id}/integrity-flags", status_code=status.HTTP_201_CREATED)

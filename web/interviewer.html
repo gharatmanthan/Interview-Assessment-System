@@ -54,6 +54,8 @@ let accessToken = localStorage.getItem("interviewiq_interviewer_token");
 let sessions = [];
 let selectedSession;
 let refreshTimer;
+let frameUrl;
+let refreshInFlight = false;
 
 function authHeaders(extra = {}) {
   return {...extra, Authorization: `Bearer ${accessToken}`};
@@ -75,17 +77,20 @@ async function loginInterviewer() {
   login.style.display = "none";
   monitor.style.display = "block";
   await refresh();
-  refreshTimer = setInterval(refresh, 2000);
+  refreshTimer = setInterval(refresh, 1000);
 }
 
 async function refresh() {
+  if (refreshInFlight) return;
+  refreshInFlight = true;
+  try {
   const response = await fetch("/api/v1/interviews", {headers: authHeaders()});
   if (!response.ok) throw new Error("Could not load live interviews.");
   sessions = await response.json();
   sessionsList.replaceChildren();
   sessions.forEach(item => {
     const li = document.createElement("li");
-    li.textContent = `${item.candidate_name} — Q${item.question_index + 1}`;
+    li.textContent = `${item.candidate_name} â€” Q${item.question_index + 1}`;
     li.className = item.session_id === selectedSession ? "selected" : "";
     li.onclick = () => { selectedSession = item.session_id; refresh(); };
     sessionsList.appendChild(li);
@@ -96,14 +101,22 @@ async function refresh() {
   candidate.textContent = current.candidate_name;
   question.textContent = current.question;
   transcript.textContent = current.transcript || "No answer submitted.";
-  await refreshFrame(current.session_id);
-  await refreshEvents(current.session_id);
+  await Promise.all([
+    refreshFrame(current.session_id),
+    refreshEvents(current.session_id)
+  ]);
+  } finally {
+    refreshInFlight = false;
+  }
 }
 
 async function refreshFrame(id) {
   const response = await fetch(`/api/v1/interviews/${id}/frame`, {headers: authHeaders()});
   if (!response.ok) return;
-  frame.src = URL.createObjectURL(await response.blob());
+  const nextUrl = URL.createObjectURL(await response.blob());
+  if (frameUrl) URL.revokeObjectURL(frameUrl);
+  frameUrl = nextUrl;
+  frame.src = frameUrl;
   frame.hidden = false;
 }
 
@@ -116,7 +129,7 @@ async function refreshEvents(id) {
   list.forEach(item => {
     const div = document.createElement("div");
     div.className = "event";
-    div.textContent = `[${item.review_status.toUpperCase()}] ${item.severity.toUpperCase()} — ${item.detail} (${Math.round(item.confidence * 100)}%)`;
+    div.textContent = `[${item.review_status.toUpperCase()}] ${item.severity.toUpperCase()} â€” ${item.detail} (${Math.round(item.confidence * 100)}%)`;
     if (item.review_status === "open") {
       const button = document.createElement("button");
       button.textContent = "Mark reviewed";

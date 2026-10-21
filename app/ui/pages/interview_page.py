@@ -9,7 +9,8 @@ import numpy as np
 import sounddevice as sd
 from scipy.io.wavfile import write as write_wav
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit, QSizePolicy, QSlider
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit,
+    QSizePolicy, QSlider, QMessageBox
 )
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
@@ -87,6 +88,7 @@ class InterviewPage(QWidget):
         self.session_id = None
         self.live_frame_path = None
         self.capture = None
+        self._last_face_result = (0, False, 0.0, "Waiting for camera...")
         self.timer = QTimer()
         self.timer.timeout.connect(self._update_frame)
         self.live_timer = QTimer(self)
@@ -153,6 +155,11 @@ class InterviewPage(QWidget):
         self.integrity_badge.setObjectName("Badge-clear")
 
         cam_btn_row.addWidget(self.start_cam_btn)
+        self.end_interview_btn = QPushButton("End Interview")
+        self.end_interview_btn.setObjectName("DangerButton")
+        self.end_interview_btn.setEnabled(False)
+        self.end_interview_btn.clicked.connect(self._end_interview)
+        cam_btn_row.addWidget(self.end_interview_btn)
         cam_btn_row.addStretch()
         cam_btn_row.addWidget(self.integrity_badge)
         cam_layout.addLayout(cam_btn_row)
@@ -402,6 +409,7 @@ class InterviewPage(QWidget):
         self.session_id = uuid4().hex
         self.session_started_at = datetime.utcnow()
         self.session_finished = False
+        self.end_interview_btn.setEnabled(True)
 
         # Determine first question
         if initial_questions:
@@ -547,7 +555,12 @@ class InterviewPage(QWidget):
                 self.environment_monitor.observe, self.session_id
             )
             QTimer.singleShot(50, self._apply_environment_check)
-        live_session = db.get_live_interview(self.session_id)
+        try:
+            live_session = db.get_live_interview(self.session_id)
+        except Exception as exc:
+            self.record_status.setText(f"Live sync unavailable: {exc}")
+            self.record_status.setStyleSheet("color: #F59E0B; font-weight: 600;")
+            return
         if not live_session:
             return
 
@@ -606,6 +619,7 @@ class InterviewPage(QWidget):
                 return
             self.timer.start(30)
             self.start_cam_btn.setText("Stop Camera")
+            self._last_face_result = (0, False, 0.0, "Checking camera...")
             self.integrity_badge.setText("Face check: Checking...")
             self.integrity_badge.setObjectName("Badge-clear")
 
@@ -616,9 +630,11 @@ class InterviewPage(QWidget):
         if not ret:
             return
         self.frame_count += 1
-        face_count, face_verified, face_confidence, face_message = face_match_confidence(
-            self.candidate_id, frame
-        )
+        if self.frame_count == 1 or self.frame_count % 6 == 0:
+            self._last_face_result = face_match_confidence(
+                self.candidate_id, frame
+            )
+        face_count, face_verified, face_confidence, face_message = self._last_face_result
         if self.session_id and self.frame_count % 6 == 0:
             self._record_integrity_flags(
                 self.face_monitor.observe(self.session_id, self.candidate_id, frame)
@@ -636,7 +652,7 @@ class InterviewPage(QWidget):
             )
             self.integrity_badge.setStyleSheet("color: #EF4444; font-weight: 600;")
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        if self.session_id and self.frame_count % 30 == 0:
+        if self.session_id and self.frame_count % 3 == 0:
             ok, encoded = cv2.imencode(
                 ".jpg", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
                 [int(cv2.IMWRITE_JPEG_QUALITY), 65],
@@ -646,7 +662,7 @@ class InterviewPage(QWidget):
                     db.upload_live_frame(self.session_id, encoded.tobytes())
                 except Exception:
                     pass
-        if self.live_frame_path:
+        if self.live_frame_path and self.frame_count % 3 == 0:
             frame_path = self.live_frame_path.with_name(
                 f".{self.live_frame_path.stem}-{uuid4().hex}.tmp.jpg"
             )
@@ -693,11 +709,34 @@ class InterviewPage(QWidget):
                 pass
             self.capture = None
         self._finalize_session()
+        self.end_interview_btn.setEnabled(False)
         if self.live_frame_path and self.live_frame_path.exists():
             try:
                 self.live_frame_path.unlink()
             except Exception:
                 pass
+
+    def _end_interview(self):
+        if not self.session_id or self.session_finished:
+            return
+        choice = QMessageBox.question(
+            self,
+            "End interview",
+            "End this interview now? The current transcript will be saved.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if choice != QMessageBox.Yes:
+            return
+        if self.audio_stream is not None:
+            self._stop_recording()
+        self.cleanup()
+        self.question_text.setText("Interview ended.")
+        self.waiting_lbl.setVisible(False)
+        self.record_btn.setEnabled(False)
+        self.record_status.setText("Interview completed. Your responses were saved.")
+        self.start_cam_btn.setEnabled(False)
+        self.video_label.setText("Interview ended.")
 
     def _finalize_session(self):
         if not self.session_id or self.session_finished:
