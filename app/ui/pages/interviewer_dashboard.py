@@ -8,7 +8,6 @@ Shows:
   - Live integrity alerts panel
 """
 from datetime import datetime
-import logging
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
@@ -25,8 +24,6 @@ from PySide6.QtWidgets import (
 
 from app.core import db
 from app.reports.analytics import get_dashboard_stats
-
-logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -297,13 +294,6 @@ class InterviewerDashboard(QWidget):
         self._refresh_sessions()
         self._refresh_alerts()
 
-    def _safe(self, label, loader, fallback):
-        try:
-            return loader()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Dashboard %s unavailable: %s", label, exc)
-            return fallback
-
     def start_refreshing(self):
         """Begin loading remote dashboard data after authentication."""
         if not self.refresh_timer.isActive():
@@ -327,13 +317,13 @@ class InterviewerDashboard(QWidget):
                 "integrity_flags": 0,
             }
 
-        all_sessions = self._safe("sessions", db.get_all_sessions, [])
+        all_sessions = db.get_all_sessions()
         today_str = datetime.now().strftime("%Y-%m-%d")
         sessions_today = sum(
             1 for s in all_sessions
             if s.get("started_at", "").startswith(today_str)
         )
-        active_jobs = len(self._safe("job postings", db.get_active_job_postings, []))
+        active_jobs = len(db.get_active_job_postings())
 
         cards_data = [
             ("Sessions Today",  str(sessions_today),                           "Interviews conducted",       "#5B5FEF"),
@@ -352,7 +342,7 @@ class InterviewerDashboard(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
-        sessions = self._safe("session rows", db.get_all_sessions, [])[:15]  # latest 15
+        sessions = db.get_all_sessions()[:15]  # latest 15
         self.no_sessions_lbl.setVisible(not sessions)
         self.sessions_scroll.setVisible(bool(sessions))
 
@@ -366,7 +356,7 @@ class InterviewerDashboard(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
-        flags = self._safe("integrity flags", db.get_all_integrity_flags, [])[:10]
+        flags = db.get_all_integrity_flags()[:10]
         self.no_alerts_lbl.setVisible(not flags)
         self.alerts_scroll.setVisible(bool(flags))
 

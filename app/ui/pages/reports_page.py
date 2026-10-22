@@ -1,5 +1,4 @@
 from pathlib import Path
-import logging
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -9,8 +8,6 @@ from PySide6.QtWidgets import (
 
 from app.core import db
 from app.reports.pdf_export import export_report
-
-logger = logging.getLogger(__name__)
 
 
 class ReportsPage(QWidget):
@@ -69,46 +66,28 @@ class ReportsPage(QWidget):
         self.refresh()
 
     def refresh(self):
-        try:
-            self.sessions = db.get_all_sessions()
-        except Exception as error:  # noqa: BLE001
-            self.sessions = []
-            self.sessions_list.clear()
-            self.report_text.setPlainText(f"Could not load sessions: {error}")
-            return
+        self.sessions = db.get_all_sessions()
         self.sessions_list.clear()
         for session in self.sessions:
             self.sessions_list.addItem(
-                f"{session.get('candidate_name', 'Unknown')} | "
-                f"{session.get('job_title', '')} | {session.get('status', '')}"
+                f"{session['candidate_name']} | {session['job_title']} | {session['status']}"
             )
         if self.sessions:
             self.sessions_list.setCurrentRow(0)
         else:
-            self.report_text.setPlainText("No interview sessions available yet.")
-
-    @staticmethod
-    def _load(loader, fallback, label):
-        try:
-            return loader()
-        except Exception as error:  # noqa: BLE001
-            logger.warning("Reports %s unavailable: %s", label, error)
-            return fallback
+            self.report_text.setPlainText("No completed interview sessions yet.")
 
     def _show_selected(self, row):
         if row < 0 or row >= len(self.sessions):
             return
         session = self.sessions[row]
-        session_id = session["session_id"]
-        scores = self._load(lambda: db.get_session_scores(session_id), [], "scores")
-        explanations = self._load(
-            lambda: db.get_session_explanations(session_id), [], "explanations"
-        )
-        flags = self._load(lambda: db.get_session_flags(session_id), [], "flags")
+        scores = db.get_session_scores(session["session_id"])
+        explanations = db.get_session_explanations(session["session_id"])
+        flags = db.get_session_flags(session["session_id"])
         lines = [
-            f"Candidate: {session.get('candidate_name', 'Unknown')}",
-            f"Role: {session.get('job_title', '')}",
-            f"Status: {session.get('status', '')}",
+            f"Candidate: {session['candidate_name']}",
+            f"Role: {session['job_title']}",
+            f"Status: {session['status']}",
             "",
             "Scores:",
         ]

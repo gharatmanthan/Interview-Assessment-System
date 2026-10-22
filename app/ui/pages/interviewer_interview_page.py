@@ -145,12 +145,6 @@ class InterviewerInterviewPage(QWidget):
             max_workers=1, thread_name_prefix="session-refresh"
         )
         self._session_future = None
-        self._flags_executor = ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="integrity-refresh"
-        )
-        self._flags_future = None
-        self._flags_session_id = None
-        self._flags_fetched_at = 0.0
         self.integrity_events = []
 
         root = QVBoxLayout(self)
@@ -161,12 +155,8 @@ class InterviewerInterviewPage(QWidget):
         title.setObjectName("PageTitle")
         subtitle = QLabel("Watch, guide, and approve AI questions for the candidate")
         subtitle.setObjectName("PageSubtitle")
-        self.backend_label = QLabel("")
-        self.backend_label.setObjectName("WaitingLabel")
-        self.backend_label.setStyleSheet("color: #667085; font-size: 11px;")
         root.addWidget(title)
         root.addWidget(subtitle)
-        root.addWidget(self.backend_label)
 
         body = QHBoxLayout()
         body.setSpacing(20)
@@ -284,10 +274,6 @@ class InterviewerInterviewPage(QWidget):
 
     def start_refreshing(self):
         """Begin polling remote interview data after authentication."""
-        try:
-            self.backend_label.setText(f"Backend: {db.backend_description()}")
-        except Exception:  # noqa: BLE001
-            self.backend_label.setText("Backend: unknown")
         if not self.refresh_timer.isActive():
             self.refresh_timer.start(1500)
         self.refresh_sessions()
@@ -342,10 +328,7 @@ class InterviewerInterviewPage(QWidget):
         self._session_future = None
         try:
             sessions = future.result()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Live session refresh failed: %s", exc)
-            self.sessions_list.clear()
-            self.sessions_list.addItem("Live monitor unavailable — see message below")
+        except Exception as exc:
             self.status_label.setText(f"Live monitor unavailable: {exc}")
             return
         selected_id = self.selected_session_id
@@ -366,14 +349,9 @@ class InterviewerInterviewPage(QWidget):
         self.sessions_list.blockSignals(False)
         if not sessions:
             self.sessions_list.addItem("No active interviews yet")
-            try:
-                backend = db.backend_description()
-            except Exception:  # noqa: BLE001
-                backend = "unknown"
             self.status_label.setText(
-                "Waiting for a candidate to start an interview. "
-                f"Backend: {backend}. A candidate only appears here after "
-                "signing in to the SAME backend and starting an interview."
+                "Waiting for the candidate to start an interview. "
+                "Keep this monitor open while they begin."
             )
 
         if selected_row >= 0:
@@ -529,50 +507,12 @@ class InterviewerInterviewPage(QWidget):
 
     def _refresh_integrity_flags(self, session_id):
         if not session_id:
-            self._flags_session_id = None
             self.integrity_events = []
             self.integrity_list.clear()
             self.review_integrity_button.setEnabled(False)
             return
 
-        # This used to run a network request on the Qt UI thread on every
-        # 1.5 s refresh, which froze the monitor when the API was slow.
-        now = time.monotonic()
-        if (
-            session_id == self._flags_session_id
-            and now - self._flags_fetched_at < 5.0
-        ):
-            return
-        if self._flags_future is not None and not self._flags_future.done():
-            return
-
-        self._flags_session_id = session_id
-        self._flags_future = self._flags_executor.submit(
-            db.get_session_flags, session_id
-        )
-        QTimer.singleShot(50, self._apply_integrity_flags)
-
-    def _apply_integrity_flags(self):
-        future = self._flags_future
-        if future is None or not future.done():
-            if future is not None:
-                QTimer.singleShot(50, self._apply_integrity_flags)
-            return
-        self._flags_future = None
-        self._flags_fetched_at = time.monotonic()
-        if self._flags_session_id not in {
-            self._video_session_id, self.selected_session_id
-        }:
-            return
-        try:
-            flags = future.result()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Could not load integrity events: %s", exc)
-            self.integrity_list.clear()
-            self.integrity_list.addItem(f"Integrity events unavailable: {exc}")
-            self.review_integrity_button.setEnabled(False)
-            return
-
+        flags = db.get_session_flags(session_id)
         self.integrity_events = flags
         self.integrity_list.clear()
         if not flags:
@@ -608,7 +548,6 @@ class InterviewerInterviewPage(QWidget):
         db.review_integrity_flag(
             session["session_id"], event["id"], "reviewed", "Reviewed by interviewer."
         )
-        self._flags_fetched_at = 0.0
         self._refresh_integrity_flags(session["session_id"])
 
     # ------------------------------------------------------------------
@@ -733,7 +672,6 @@ class InterviewerInterviewPage(QWidget):
         self.video_timer.stop()
         self._frame_executor.shutdown(wait=False, cancel_futures=True)
         self._session_executor.shutdown(wait=False, cancel_futures=True)
-        self._flags_executor.shutdown(wait=False, cancel_futures=True)
         if self._video_future is not None:
             self._video_future.cancel()
         self._cleanup_regen()

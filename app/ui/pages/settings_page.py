@@ -182,30 +182,13 @@ class SettingsPage(QWidget):
                 QMessageBox.warning(self, "Invalid API URL", str(error))
                 self.remote_api_input.setFocus()
                 return
-        previous = settings_store.load_settings()
-        backend_mode = self.backend_combo.currentData()
-        backend_changed = (
-            previous.get("backend_mode", "local") != backend_mode
-            or (previous.get("remote_api_url", "") or "").rstrip("/") != remote_url
-        )
         settings_store.save_settings({
             "camera_index": self.camera_combo.currentData(),
             "mic_device": self.mic_combo.currentData(),
             "llm_provider": self.provider_combo.currentText(),
             "llm_api_key": self.api_key_input.text(),
             "export_dir": self.export_dir_input.text(),
-            "backend_mode": backend_mode,
+            "backend_mode": self.backend_combo.currentData(),
             "remote_api_url": remote_url,
         })
-        if backend_changed:
-            from app.core import db
-            db.reset_remote_client()
-            QMessageBox.information(
-                self,
-                "Settings saved",
-                "Backend connection changed.\n\n"
-                "Restart the app and sign in again so the new backend is used "
-                "and your session is authorized against it.",
-            )
-            return
         QMessageBox.information(self, "Settings saved", "Your settings have been saved.")

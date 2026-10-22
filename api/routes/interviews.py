@@ -113,10 +113,8 @@ async def video_stream(session_id: str, websocket: WebSocket) -> None:
         viewers.add(websocket)
         try:
             while True:
-                message = await websocket.receive()
-                if message.get("type") == "websocket.disconnect":
-                    break
-        except (WebSocketDisconnect, RuntimeError):
+                await websocket.receive()
+        except WebSocketDisconnect:
             pass
         finally:
             viewers.discard(websocket)

@@ -33,18 +33,3 @@ def require_role(role: str):
         return user
 
     return dependency
-
-
-def require_any_role(*roles: str):
-    """Allow any one of the given roles (e.g. data both sides may read)."""
-    allowed = set(roles)
-
-    def dependency(user: dict = Depends(current_user)) -> dict:
-        if user.get("role") not in allowed:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="This account is not authorized for this operation.",
-            )
-        return user
-
-    return dependency
