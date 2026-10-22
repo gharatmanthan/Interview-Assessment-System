@@ -7,7 +7,7 @@ import websocket
 
 
 class RemoteApiClient:
-    def __init__(self, base_url: str, timeout: float = 5):
+    def __init__(self, base_url: str, timeout: float = 30):
         self.base_url = self._normalize_base_url(base_url)
         self.timeout = timeout
         self.access_token = None
@@ -116,7 +116,7 @@ class RemoteApiClient:
             url = self.base_url.replace("https://", "wss://").replace("http://", "ws://")
             self._video_socket = websocket.create_connection(
                 f"{url}/interviews/{session_id}/video?token={self.access_token}",
-                timeout=5,
+                timeout=15,
             )
         try:
             self._video_socket.send(frame, opcode=websocket.ABNF.OPCODE_BINARY)
@@ -128,7 +128,7 @@ class RemoteApiClient:
         url = self.base_url.replace("https://", "wss://").replace("http://", "ws://")
         socket = websocket.create_connection(
             f"{url}/interviews/{session_id}/video?token={self.access_token}",
-            timeout=10,
+            timeout=30,
         )
         try:
             while True:
