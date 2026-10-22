@@ -261,6 +261,7 @@ class CandidateDashboard(QWidget):
         self.welcome_lbl.setText(f"Welcome back, {candidate_name}")
         self.load_jobs()
         self.face_enrolled = has_enrolled_face(candidate_id)
+        self.face_clear = self.face_enrolled
         saved_profile = db.get_candidate_profile(candidate_id)
         if saved_profile:
             self.resume_profile = saved_profile["profile"]
@@ -388,10 +389,14 @@ class CandidateDashboard(QWidget):
         self.capture.release()
         self.capture = None
         self.latest_frame = None
-        self.face_clear = False
+        self.face_clear = self.face_enrolled
         self.camera_button.setText("Start Camera")
-        self.face_badge.setText("Identity: Camera stopped")
-        self.face_badge.setObjectName("StatusPending")
+        if self.face_enrolled:
+            self.face_badge.setText("Identity: Enrolled (camera stopped)")
+            self.face_badge.setObjectName("StatusPass")
+        else:
+            self.face_badge.setText("Identity: Camera stopped")
+            self.face_badge.setObjectName("StatusPending")
         self.face_badge.style().unpolish(self.face_badge)
         self.face_badge.style().polish(self.face_badge)
         self.camera_preview.setText("Click 'Start Camera' to verify your face")
@@ -475,7 +480,7 @@ class CandidateDashboard(QWidget):
 
     def _update_start_state(self):
         ready = (
-            self.face_clear
+            (self.face_clear or self.face_enrolled)
             and self.selected_job_id is not None
             and self.resume_profile is not None
         )
@@ -484,7 +489,7 @@ class CandidateDashboard(QWidget):
             missing = []
             if not self.resume_profile:
                 missing.append("upload resume")
-            if not self.face_clear:
+            if not self.face_clear and not self.face_enrolled:
                 missing.append("verify face")
             if not self.selected_job_id:
                 missing.append("select a job")
@@ -498,6 +503,9 @@ class CandidateDashboard(QWidget):
     def _launch_interview(self):
         """Generate first question in background, then emit interview_ready."""
         if not self.selected_job or not self.resume_profile:
+            self.start_status_lbl.setText(
+                "Select an interview and upload a resume before starting."
+            )
             return
 
         # Release webcam before switching to interview

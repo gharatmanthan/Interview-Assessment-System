@@ -398,7 +398,12 @@ class InterviewPage(QWidget):
         """
         job = next((j for j in db.get_active_job_postings() if j["id"] == job_id), None)
         if not job or not self.candidate_id:
-            return
+            QMessageBox.critical(
+                self,
+                "Could not start interview",
+                "The selected interview is no longer available. Refresh jobs and try again.",
+            )
+            return False
 
         self.job_id = job_id
         self.job_title = job["title"]
@@ -433,16 +438,27 @@ class InterviewPage(QWidget):
             started_at=self.session_started_at,
             status="in_progress",
         ))
-        db.start_live_interview(
-            self.session_id,
-            self.candidate_id,
-            self.candidate_name,
-            first_q,
-            0,
-        )
+        try:
+            db.start_live_interview(
+                self.session_id,
+                self.candidate_id,
+                self.candidate_name,
+                first_q,
+                0,
+            )
+        except Exception as error:
+            self.session_id = None
+            self.end_interview_btn.setEnabled(False)
+            QMessageBox.critical(
+                self,
+                "Could not start interview",
+                f"The remote interview service rejected the session:\n{error}",
+            )
+            return False
         self._record_integrity_flags(run_checks(self.session_id))
         self._environment_ticks = 0
         self.live_timer.start(1000)
+        return True
 
     def _display_current_question(self):
         from app.engine.question_generator import MAX_QUESTIONS, _CATEGORY_SEQUENCE

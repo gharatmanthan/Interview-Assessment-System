@@ -113,8 +113,11 @@ class MainWindow(QMainWindow):
     def _start_candidate_interview(self, job_id: int, questions: list):
         if hasattr(self.pages["dashboard"], "cleanup"):
             self.pages["dashboard"].cleanup()
-        self.pages["interview"].set_job(job_id, questions if questions else None)
-        self._navigate("interview")
+        started = self.pages["interview"].set_job(
+            job_id, questions if questions else None
+        )
+        if started:
+            self._navigate("interview")
 
     def _navigate(self, key):
         page = self.pages.get(key)
