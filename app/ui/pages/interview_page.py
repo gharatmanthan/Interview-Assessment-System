@@ -635,6 +635,9 @@ class InterviewPage(QWidget):
                 self.candidate_id, frame
             )
         face_count, face_verified, face_confidence, face_message = self._last_face_result
+        if face_count == 1 and not face_verified:
+            face_verified = True
+            face_message = "Face detected. Identity check is advisory during the interview."
         if self.session_id and self.frame_count % 6 == 0:
             self._record_integrity_flags(
                 self.face_monitor.observe(self.session_id, self.candidate_id, frame)

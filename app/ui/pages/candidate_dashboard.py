@@ -475,8 +475,7 @@ class CandidateDashboard(QWidget):
 
     def _update_start_state(self):
         ready = (
-            self.environment_clear
-            and self.face_clear
+            self.face_clear
             and self.selected_job_id is not None
             and self.resume_profile is not None
         )
@@ -487,13 +486,14 @@ class CandidateDashboard(QWidget):
                 missing.append("upload resume")
             if not self.face_clear:
                 missing.append("verify face")
-            if not self.environment_clear:
-                missing.append("clear environment")
             if not self.selected_job_id:
                 missing.append("select a job")
             self.start_status_lbl.setText(f"Still needed: {', '.join(missing)}")
         else:
-            self.start_status_lbl.setText("All checks passed. You are ready to begin.")
+            warning = "" if self.environment_clear else " Review environment warnings before continuing."
+            self.start_status_lbl.setText(
+                f"All checks passed. You are ready to begin.{warning}"
+            )
 
     def _launch_interview(self):
         """Generate first question in background, then emit interview_ready."""

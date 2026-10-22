@@ -84,10 +84,9 @@ class FaceIntegrityMonitor:
             signal = "extra_person"
             severity = "high"
             detail = f"{face_count} faces visible in the camera frame."
-        elif not matched:
-            signal = "face_mismatch"
-            severity = "high"
-            detail = "Visible face did not match the enrolled candidate."
+        # Live monitoring is advisory. Identity matching is performed during
+        # the pre-interview enrollment step; lighting and camera angle changes
+        # must not stop an otherwise valid interview.
 
         now = monotonic()
         if signal is None:
