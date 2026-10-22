@@ -12,6 +12,7 @@ import sqlite3
 import json
 import os
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from dataclasses import asdict
@@ -518,17 +519,34 @@ def upload_live_frame(session_id: str, frame: bytes) -> None:
 
 def stream_live_video(session_id: str, on_frame) -> None:
     remote = _remote_client()
-    if remote is None:
-        return
+    if remote is not None:
+        def receive_remote():
+            try:
+                for frame in remote.receive_video_frames(session_id):
+                    on_frame(frame)
+            except Exception as exc:
+                logger.warning("Live video stream ended: %s", exc)
 
-    def receive():
-        try:
-            for frame in remote.receive_video_frames(session_id):
-                on_frame(frame)
-        except Exception as exc:
-            logger.warning("Live video stream ended: %s", exc)
+        return _video_receive_executor.submit(receive_remote)
 
-    return _video_receive_executor.submit(receive)
+    def receive_local():
+        frame_path = Path("data") / "live_frames" / f"{session_id}.jpg"
+        last_mtime = 0.0
+        while True:
+            try:
+                if frame_path.exists():
+                    mtime = frame_path.stat().st_mtime_ns
+                    if mtime != last_mtime:
+                        frame = frame_path.read_bytes()
+                        if frame:
+                            on_frame(frame)
+                        last_mtime = mtime
+                time.sleep(0.05)
+            except (FileNotFoundError, OSError) as exc:
+                logger.debug("Local live frame read retry for %s: %s", session_id, exc)
+                time.sleep(0.1)
+
+    return _video_receive_executor.submit(receive_local)
 
 
 def download_live_frame(session_id: str) -> bytes | None:
