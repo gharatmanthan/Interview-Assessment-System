@@ -40,6 +40,16 @@ def _log_background_failure(future):
         logger.error("Background integrity event upload failed: %s", error)
 
 
+def _iso(value) -> str:
+    """Best-effort ISO text for datetimes coming back from the API."""
+    if not value:
+        return ""
+    try:
+        return value.isoformat()
+    except AttributeError:
+        return str(value)
+
+
 def _remote_client() -> RemoteApiClient | None:
     global _remote_client_instance, _remote_client_url
     settings = load_settings()
@@ -57,6 +67,27 @@ def _remote_client() -> RemoteApiClient | None:
         _remote_client_instance = RemoteApiClient(base_url)
         _remote_client_url = base_url
     return _remote_client_instance
+
+
+def reset_remote_client():
+    """Forget the cached remote client so new backend settings take effect."""
+    global _remote_client_instance, _remote_client_url
+    _remote_client_instance = None
+    _remote_client_url = None
+
+
+def backend_description() -> str:
+    """Human-readable backend target for UI status labels."""
+    settings = load_settings()
+    backend_mode = os.environ.get(
+        "INTERVIEWIQ_BACKEND_MODE", settings.get("backend_mode", "local")
+    ).strip().lower()
+    if backend_mode != "remote":
+        return "Local database"
+    base_url = os.environ.get(
+        "INTERVIEWIQ_API_URL", settings.get("remote_api_url", "")
+    ).strip()
+    return f"Remote: {base_url}" if base_url else "Remote: (no API URL configured)"
 
 
 def get_connection():
@@ -387,6 +418,21 @@ def save_fairness_flag(flag):
 # --- reads (called by app/reports/ for dashboard + report pages) ---
 
 def get_all_sessions():
+    remote = _remote_client()
+    if remote:
+        sessions = []
+        for row in remote.list_sessions():
+            sessions.append({
+                "session_id": row.get("session_id"),
+                "candidate_id": row.get("candidate_id", ""),
+                "candidate_name": row.get("candidate_name", "Unknown candidate"),
+                "job_title": row.get("job_title") or "Live interview",
+                "status": row.get("status", ""),
+                "started_at": _iso(row.get("started_at") or row.get("updated_at")),
+                "completed_at": _iso(row.get("completed_at")),
+                "transcript": row.get("transcript", ""),
+            })
+        return sessions
     conn = get_connection()
     rows = conn.execute("SELECT * FROM sessions ORDER BY started_at DESC").fetchall()
     conn.close()
@@ -650,6 +696,26 @@ def get_session_explanations(session_id):
 
 
 def get_all_integrity_flags():
+    remote = _remote_client()
+    if remote:
+        flags = []
+        try:
+            sessions = get_all_sessions()[:25]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not list remote sessions for integrity flags: %s", exc)
+            return []
+        for session in sessions:
+            session_id = session.get("session_id")
+            if not session_id:
+                continue
+            try:
+                flags.extend(remote.get_session_flags(session_id))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Could not load integrity flags for %s: %s", session_id, exc
+                )
+        flags.sort(key=lambda flag: str(flag.get("timestamp", "")), reverse=True)
+        return flags
     conn = get_connection()
     rows = conn.execute("SELECT * FROM integrity_flags ORDER BY timestamp DESC").fetchall()
     conn.close()

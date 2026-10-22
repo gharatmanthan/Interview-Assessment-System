@@ -147,6 +147,43 @@ def main() -> int:
     for item in body:
         print(f"      - {item.get('candidate_id')} | {item.get('full_name')}")
 
+    print("\n[3b] GET /jobs  (interviewer dashboard stat card)")
+    result = request_json(session, "GET", f"{base}/jobs", headers=headers)
+    if result is None:
+        return 8
+    response, body = result
+    print(f"    HTTP {response.status_code}")
+    if response.status_code == 200:
+        print(f"    job postings: {len(body)}")
+    elif response.status_code == 403:
+        print(
+            "    403: the deployed API still restricts /jobs to candidate tokens.\n"
+            "    The desktop now tolerates this, but redeploy the updated API\n"
+            "    (require_any_role for GET /jobs) to show the real job count."
+        )
+    else:
+        print(f"    body: {body}")
+
+    print("\n[3c] GET /sessions  (report/dashboard history)")
+    result = request_json(session, "GET", f"{base}/sessions", headers=headers)
+    if result is None:
+        return 8
+    response, body = result
+    print(f"    HTTP {response.status_code}")
+    if response.status_code == 200:
+        print(f"    server sessions: {len(body)}")
+        for item in body[:5]:
+            print(
+                f"      - {item.get('candidate_name')} | session={item.get('session_id')}"
+                f" | status={item.get('status')}"
+            )
+    else:
+        print(
+            f"    body: {body}\n"
+            "    404 is expected on the old deploy; the desktop falls back to\n"
+            "    GET /interviews automatically."
+        )
+
     live = [item for item in interviews if item.get("status") == "live"]
 
     print("\n[4] GET /interviews/{id}/frame  (camera frame)")

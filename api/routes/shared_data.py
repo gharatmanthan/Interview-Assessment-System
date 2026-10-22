@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from api import persistence as db
 from api.schemas import CandidateAccountRequest, CandidateCredentials, JobPostingRequest
-from api.dependencies import require_role
+from api.dependencies import require_any_role, require_role
 from api.auth import create_token
 
 router = APIRouter(tags=["shared-data"])
@@ -36,7 +36,7 @@ def authenticate_candidate(payload: CandidateCredentials) -> dict:
 
 
 @router.get("/jobs")
-def list_jobs(_: dict = Depends(require_role("candidate"))) -> list[dict]:
+def list_jobs(_: dict = Depends(require_any_role("candidate", "interviewer"))) -> list[dict]:
     return db.get_active_job_postings()
 
 
@@ -44,3 +44,9 @@ def list_jobs(_: dict = Depends(require_role("candidate"))) -> list[dict]:
 def create_job(payload: JobPostingRequest, _: dict = Depends(require_role("interviewer"))) -> dict[str, str]:
     db.save_job_posting(payload.title, payload.description)
     return {"title": payload.title, "description": payload.description}
+
+
+@router.get("/sessions")
+def list_sessions(_: dict = Depends(require_role("interviewer"))) -> list[dict]:
+    """Server-side session history for interviewer reports and dashboards."""
+    return db.get_all_interview_sessions()

@@ -1,9 +1,12 @@
 """Small client for the shared Render interview API."""
+import logging
 from typing import Any
 from urllib.parse import urlsplit
 
 import requests
 import websocket
+
+logger = logging.getLogger(__name__)
 
 
 class RemoteApiClient:
@@ -40,6 +43,11 @@ class RemoteApiClient:
             timeout=self.timeout,
             **kwargs,
         )
+        if response.status_code == 401 and not self.access_token:
+            raise RuntimeError(
+                "The remote backend is enabled but this app is not signed in "
+                "to it. Restart the app and sign in with your remote account."
+            )
         response.raise_for_status()
         return response.json() if response.content else None
 
@@ -75,6 +83,20 @@ class RemoteApiClient:
 
     def list_live_interviews(self) -> list[dict]:
         return self._request("GET", "/interviews")
+
+    def list_sessions(self) -> list[dict]:
+        """All sessions known to the server (newest first).
+
+        Falls back to the live-only listing on older deployments that do not
+        expose ``GET /sessions`` yet.
+        """
+        try:
+            return self._request("GET", "/sessions")
+        except requests.HTTPError as exc:
+            status_code = getattr(exc.response, "status_code", None)
+            if status_code in {404, 405}:
+                return self._request("GET", "/interviews")
+            raise
 
     def get_live_interview(self, session_id: str) -> dict | None:
         try:
@@ -173,7 +195,14 @@ class RemoteApiClient:
         )
 
     def get_session_flags(self, session_id: str) -> list[dict]:
-        return self._request("GET", f"/interviews/{session_id}/integrity-flags")
+        try:
+            return self._request("GET", f"/interviews/{session_id}/integrity-flags")
+        except requests.HTTPError as exc:
+            # A session that only exists locally (or was pruned) has no flags
+            # on the server. Treat it as "no flags" instead of raising.
+            if getattr(exc.response, "status_code", None) == 404:
+                return []
+            raise
 
     def review_integrity_flag(
         self, session_id: str, flag_id: int, review_status: str, review_note: str = ""
@@ -220,7 +249,19 @@ class RemoteApiClient:
         return True
 
     def get_active_job_postings(self) -> list[dict]:
-        return self._request("GET", "/jobs")
+        try:
+            return self._request("GET", "/jobs")
+        except requests.HTTPError as exc:
+            # Deployments that still restrict /jobs to candidates would otherwise
+            # break the whole interviewer dashboard refresh every few seconds.
+            if getattr(exc.response, "status_code", None) in {403, 404, 405}:
+                logger.warning(
+                    "Job postings are unavailable to this account (HTTP %s); "
+                    "continuing with an empty list.",
+                    getattr(exc.response, "status_code", "?"),
+                )
+                return []
+            raise
 
     def save_job_posting(self, title: str, description: str) -> bool:
         self._request("POST", "/jobs", json={"title": title, "description": description})

@@ -314,6 +314,27 @@ def get_live_interviews() -> list[dict]:
         ).fetchall()
 
 
+def get_all_interview_sessions(limit: int = 200) -> list[dict]:
+    """Every session known to the server, newest first.
+
+    The desktop interviewer app uses this instead of its local SQLite list so
+    it never asks the API about a session that only exists on another machine.
+    """
+    with connection() as conn:
+        return conn.execute(
+            """
+            SELECT session_id, candidate_id, candidate_name, question,
+                question_index, transcript, status, updated_at,
+                pending_question, pending_status, question_count,
+                interview_context
+            FROM live_interviews
+            ORDER BY updated_at DESC
+            LIMIT %s
+            """,
+            (limit,),
+        ).fetchall()
+
+
 def get_live_interview(session_id: str) -> dict | None:
     with connection() as conn:
         return conn.execute(
