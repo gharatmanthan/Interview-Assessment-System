@@ -8,7 +8,7 @@ from fastapi.responses import Response
 
 from api import persistence as db
 from api.auth import decode_token
-from api.dependencies import require_role
+from api.dependencies import current_user, require_role
 from api.schemas import (
     ApproveQuestionRequest,
     IntegrityFlagRequest,
@@ -55,8 +55,19 @@ def start_interview(payload: StartInterviewRequest, _: dict = Depends(require_ro
 
 
 @router.get("/{session_id}")
-def get_interview(session_id: str, _: dict = Depends(require_role("interviewer"))) -> dict:
-    return _get_or_404(session_id)
+def get_interview(session_id: str, user: dict = Depends(current_user)) -> dict:
+    interview = _get_or_404(session_id)
+    if user.get("role") == "interviewer":
+        return interview
+    if (
+        user.get("role") == "candidate"
+        and user.get("sub") == interview.get("candidate_id")
+    ):
+        return interview
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="This account is not authorized to view this interview.",
+    )
 
 
 @router.put("/{session_id}/frame", status_code=status.HTTP_204_NO_CONTENT)
@@ -81,7 +92,8 @@ def download_frame(session_id: str, _: dict = Depends(require_role("interviewer"
 async def video_stream(session_id: str, websocket: WebSocket) -> None:
     try:
         user = _websocket_user(websocket)
-        if db.get_live_interview(session_id) is None:
+        interview = db.get_live_interview(session_id)
+        if interview is None:
             await websocket.close(code=4404)
             return
         role = user.get("role")
