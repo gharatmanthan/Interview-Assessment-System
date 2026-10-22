@@ -133,6 +133,10 @@ class InterviewerInterviewPage(QWidget):
         )
         self._frame_future = None
         self._frame_session_id = None
+        # Web candidates publish frames through the REST endpoint, while the
+        # native client prefers a WebSocket.  Keep a small REST polling
+        # fallback so either publisher is visible in this monitor.
+        self._next_frame_poll_at = 0.0
         self._video_session_id = None
         self._video_frames = queue.Queue(maxsize=2)
         self._video_future = None
@@ -385,9 +389,11 @@ class InterviewerInterviewPage(QWidget):
                 frame_path, self._enqueue_video_frame
             )
             self._video_retry_at = time.monotonic() + 1.0
+            self._next_frame_poll_at = 0.0
             self._request_frame(frame_path)
         if not frame_path:
             self._video_session_id = None
+            self._next_frame_poll_at = 0.0
             self._request_frame(None)
 
         self._refresh_integrity_flags(session.get("session_id") if is_live else None)
@@ -419,15 +425,23 @@ class InterviewerInterviewPage(QWidget):
     def _apply_video_frames(self):
         if not self._video_session_id:
             return
+        now = time.monotonic()
         if (
             self._video_future is not None
             and self._video_future.done()
-            and time.monotonic() >= self._video_retry_at
+            and now >= self._video_retry_at
         ):
             self._video_future = db.stream_live_video(
                 self._video_session_id, self._enqueue_video_frame
             )
-            self._video_retry_at = time.monotonic() + 1.0
+            self._video_retry_at = now + 1.0
+
+        # The WebSocket is low latency when both clients use it.  Polling the
+        # stored latest JPEG also supports browser candidates and gracefully
+        # survives proxies that do not keep WebSockets open.
+        if now >= self._next_frame_poll_at:
+            self._request_frame(self._video_session_id)
+            self._next_frame_poll_at = now + 0.5
         latest = None
         try:
             while True:
