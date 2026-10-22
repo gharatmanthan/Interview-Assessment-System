@@ -385,6 +385,7 @@ class InterviewerInterviewPage(QWidget):
                 frame_path, self._enqueue_video_frame
             )
             self._video_retry_at = time.monotonic() + 1.0
+            self._request_frame(frame_path)
         if not frame_path:
             self._video_session_id = None
             self._request_frame(None)

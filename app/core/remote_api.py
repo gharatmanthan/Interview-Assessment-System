@@ -112,17 +112,22 @@ class RemoteApiClient:
         )
 
     def send_video_frame(self, session_id: str, frame: bytes) -> None:
-        if self._video_socket is None:
-            url = self.base_url.replace("https://", "wss://").replace("http://", "ws://")
-            self._video_socket = websocket.create_connection(
-                f"{url}/interviews/{session_id}/video?token={self.access_token}",
-                timeout=15,
-            )
         try:
+            if self._video_socket is None:
+                url = self.base_url.replace("https://", "wss://").replace("http://", "ws://")
+                self._video_socket = websocket.create_connection(
+                    f"{url}/interviews/{session_id}/video?token={self.access_token}",
+                    timeout=15,
+                )
             self._video_socket.send(frame, opcode=websocket.ABNF.OPCODE_BINARY)
         except (websocket.WebSocketException, OSError):
-            self._video_socket.close()
+            if self._video_socket is not None:
+                self._video_socket.close()
             self._video_socket = None
+            try:
+                self.upload_frame(session_id, frame)
+            except requests.RequestException:
+                pass
 
     def receive_video_frames(self, session_id: str):
         url = self.base_url.replace("https://", "wss://").replace("http://", "ws://")

@@ -127,6 +127,7 @@ async def video_stream(session_id: str, websocket: WebSocket) -> None:
             frame = await websocket.receive_bytes()
             if not frame or len(frame) > 400_000:
                 continue
+            db.save_live_frame(session_id, frame)
             for viewer in tuple(_video_viewers.get(session_id, ())):
                 try:
                     await viewer.send_bytes(frame)
