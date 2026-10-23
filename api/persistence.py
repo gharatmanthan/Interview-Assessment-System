@@ -1,38 +1,43 @@
-"""PostgreSQL persistence for the deployed API.
+"""SQLite persistence for the local-network desktop API.
 
-The desktop client keeps its local SQLite store, while the API uses Neon (or
-another PostgreSQL-compatible service) when DATABASE_URL is configured.
+The interviewer PC owns this database. Candidate and interviewer desktop
+clients communicate with it over the private local network.
 """
 from __future__ import annotations
 
 import os
+import sqlite3
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Iterator
 
-import psycopg
-from psycopg.rows import dict_row
-from api.auth import hash_invitation_token, hash_password, verify_password
+from api.auth import hash_password, verify_password
 
+DB_PATH = Path(
+    os.getenv("INTERVIEWIQ_API_DB", str(Path(__file__).parent.parent / "data" / "network.db"))
+)
+DEFAULT_INTERVIEWER_ID = "interviewer01"
+DEFAULT_INTERVIEWER_PASSWORD = "interviewer123"
+DEFAULT_INTERVIEWER_NAME = "Local Interviewer"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS candidate_accounts (
     candidate_id TEXT PRIMARY KEY,
-    password TEXT,
-    password_hash TEXT,
+    password_hash TEXT NOT NULL,
     full_name TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS interviewer_accounts (
     interviewer_id TEXT PRIMARY KEY,
     password_hash TEXT NOT NULL,
     full_name TEXT NOT NULL,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE
+    is_active INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS job_postings (
-    id BIGSERIAL PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL UNIQUE,
     description TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    is_active BOOLEAN NOT NULL DEFAULT TRUE
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_active INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS live_interviews (
     session_id TEXT PRIMARY KEY,
@@ -42,128 +47,86 @@ CREATE TABLE IF NOT EXISTS live_interviews (
     question_index INTEGER NOT NULL DEFAULT 0,
     transcript TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'live',
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     pending_question TEXT NOT NULL DEFAULT '',
     pending_status TEXT NOT NULL DEFAULT 'none',
     question_count INTEGER NOT NULL DEFAULT 0,
     interview_context TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS integrity_flags (
-    id BIGSERIAL PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES live_interviews(session_id) ON DELETE CASCADE,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
     flag_type TEXT NOT NULL,
     detail TEXT NOT NULL,
     severity TEXT NOT NULL,
-    confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
-    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    confidence REAL NOT NULL DEFAULT 0,
+    timestamp TEXT NOT NULL,
     review_status TEXT NOT NULL DEFAULT 'open',
     review_note TEXT NOT NULL DEFAULT '',
-    reviewed_at TIMESTAMPTZ
+    reviewed_at TEXT
 );
-CREATE INDEX IF NOT EXISTS integrity_flags_session_timestamp_idx
-    ON integrity_flags (session_id, timestamp DESC);
 CREATE TABLE IF NOT EXISTS live_interview_frames (
-    session_id TEXT PRIMARY KEY REFERENCES live_interviews(session_id) ON DELETE CASCADE,
-    image BYTEA NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    session_id TEXT PRIMARY KEY,
+    image BLOB NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE TABLE IF NOT EXISTS interview_invitations (
-    invitation_id BIGSERIAL PRIMARY KEY,
-    token_hash TEXT NOT NULL UNIQUE,
-    job_id BIGINT NOT NULL REFERENCES job_postings(id),
-    created_by TEXT NOT NULL,
-    expires_at TIMESTAMPTZ NOT NULL,
-    used_at TIMESTAMPTZ
-);
-CREATE INDEX IF NOT EXISTS interview_invitations_token_idx
-    ON interview_invitations (token_hash);
 """
 
 
-def _database_url() -> str:
-    value = os.getenv("DATABASE_URL", "").strip()
-    if value.startswith("postgres://"):
-        value = "postgresql://" + value[len("postgres://"):]
-    if not value:
-        raise RuntimeError("DATABASE_URL is required for API persistence.")
-    return value
-
-
 @contextmanager
-def connection() -> Iterator[psycopg.Connection]:
-    with psycopg.connect(_database_url(), row_factory=dict_row) as conn:
+def connection() -> Iterator[sqlite3.Connection]:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    try:
         yield conn
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def init_db() -> None:
     with connection() as conn:
-        conn.execute(SCHEMA)
+        conn.executescript(SCHEMA)
         conn.execute(
-            "ALTER TABLE integrity_flags ADD COLUMN IF NOT EXISTS confidence "
-            "DOUBLE PRECISION NOT NULL DEFAULT 0"
+            """
+            INSERT INTO interviewer_accounts (interviewer_id, password_hash, full_name)
+            VALUES (?, ?, ?)
+            ON CONFLICT(interviewer_id) DO UPDATE SET
+                password_hash = excluded.password_hash,
+                full_name = excluded.full_name,
+                is_active = 1
+            """,
+            (
+                DEFAULT_INTERVIEWER_ID,
+                hash_password(DEFAULT_INTERVIEWER_PASSWORD),
+                DEFAULT_INTERVIEWER_NAME,
+            ),
         )
-        conn.execute(
-            "ALTER TABLE integrity_flags ADD COLUMN IF NOT EXISTS review_status "
-            "TEXT NOT NULL DEFAULT 'open'"
-        )
-        conn.execute(
-            "ALTER TABLE integrity_flags ADD COLUMN IF NOT EXISTS review_note "
-            "TEXT NOT NULL DEFAULT ''"
-        )
-        conn.execute(
-            "ALTER TABLE integrity_flags ADD COLUMN IF NOT EXISTS reviewed_at "
-            "TIMESTAMPTZ"
-        )
-        conn.execute("ALTER TABLE candidate_accounts ADD COLUMN IF NOT EXISTS password_hash TEXT")
-        conn.execute("ALTER TABLE candidate_accounts ALTER COLUMN password DROP NOT NULL")
-        legacy = conn.execute(
-            "SELECT candidate_id, password FROM candidate_accounts "
-            "WHERE password_hash IS NULL AND password IS NOT NULL"
-        ).fetchall()
-        for account in legacy:
-            conn.execute(
-                "UPDATE candidate_accounts SET password_hash = %s, password = NULL "
-                "WHERE candidate_id = %s",
-                (hash_password(account["password"]), account["candidate_id"]),
-            )
-        interviewer_id = os.getenv("INTERVIEWER_ID", "").strip()
-        interviewer_password = os.getenv("INTERVIEWER_PASSWORD", "")
-        if interviewer_id and interviewer_password:
-            conn.execute(
-                """
-                INSERT INTO interviewer_accounts (interviewer_id, password_hash, full_name)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (interviewer_id) DO NOTHING
-                """,
-                (
-                    interviewer_id,
-                    hash_password(interviewer_password),
-                    os.getenv("INTERVIEWER_NAME", "Interviewer").strip() or "Interviewer",
-                ),
-            )
         conn.execute(
             """
             INSERT INTO candidate_accounts (candidate_id, password_hash, full_name)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (candidate_id) DO NOTHING
+            VALUES (?, ?, ?)
+            ON CONFLICT(candidate_id) DO NOTHING
             """,
             ("candidate01", hash_password("interview123"), "Demo Candidate"),
         )
         for title, description in (
             (
                 "Python Backend Developer",
-                "Build reliable REST APIs and backend services with Python. Work with FastAPI or Django, PostgreSQL, automated tests, Git, and cloud deployment. We are looking for strong problem-solving, clean coding, and API design skills.",
+                "Build reliable REST APIs and backend services with Python.",
             ),
             (
                 "Frontend React Developer",
-                "Create accessible, responsive interfaces with React and modern JavaScript or TypeScript. Collaborate with designers and backend engineers, integrate APIs, write maintainable components, and improve user experience through thoughtful testing.",
+                "Create accessible, responsive interfaces with React.",
             ),
         ):
             conn.execute(
                 """
                 INSERT INTO job_postings (title, description)
-                VALUES (%s, %s)
-                ON CONFLICT (title) DO NOTHING
+                VALUES (?, ?)
+                ON CONFLICT(title) DO NOTHING
                 """,
                 (title, description),
             )
@@ -171,14 +134,17 @@ def init_db() -> None:
 
 def check_connection() -> None:
     with connection() as conn:
-        conn.execute("SELECT 1")
+        conn.execute("SELECT 1").fetchone()
 
 
 def get_candidate_accounts() -> list[dict]:
     with connection() as conn:
-        return conn.execute(
-            "SELECT candidate_id, full_name FROM candidate_accounts ORDER BY full_name"
-        ).fetchall()
+        return [
+            dict(row)
+            for row in conn.execute(
+                "SELECT candidate_id, full_name FROM candidate_accounts ORDER BY full_name"
+            )
+        ]
 
 
 def create_candidate_account(candidate_id: str, password: str, full_name: str) -> bool:
@@ -186,8 +152,8 @@ def create_candidate_account(candidate_id: str, password: str, full_name: str) -
         result = conn.execute(
             """
             INSERT INTO candidate_accounts (candidate_id, password_hash, full_name)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (candidate_id) DO NOTHING
+            VALUES (?, ?, ?)
+            ON CONFLICT(candidate_id) DO NOTHING
             """,
             (candidate_id, hash_password(password), full_name),
         )
@@ -196,41 +162,42 @@ def create_candidate_account(candidate_id: str, password: str, full_name: str) -
 
 def authenticate_candidate(candidate_id: str, password: str) -> dict | None:
     with connection() as conn:
-        account = conn.execute(
-            "SELECT candidate_id, full_name, password_hash FROM candidate_accounts "
-            "WHERE candidate_id = %s",
+        row = conn.execute(
+            "SELECT candidate_id, full_name, password_hash FROM candidate_accounts WHERE candidate_id = ?",
             (candidate_id,),
         ).fetchone()
-        if account and verify_password(password, account["password_hash"] or ""):
-            return {"candidate_id": account["candidate_id"], "full_name": account["full_name"]}
-        return None
+    if row and verify_password(password, row["password_hash"]):
+        return {"candidate_id": row["candidate_id"], "full_name": row["full_name"]}
+    return None
 
 
 def authenticate_interviewer(interviewer_id: str, password: str) -> dict | None:
     with connection() as conn:
-        account = conn.execute(
-            "SELECT interviewer_id, full_name, password_hash FROM interviewer_accounts "
-            "WHERE interviewer_id = %s AND is_active = TRUE",
+        row = conn.execute(
+            """
+            SELECT interviewer_id, full_name, password_hash
+            FROM interviewer_accounts
+            WHERE interviewer_id = ? AND is_active = 1
+            """,
             (interviewer_id,),
         ).fetchone()
-        if account and verify_password(password, account["password_hash"]):
-            return {
-                "interviewer_id": account["interviewer_id"],
-                "full_name": account["full_name"],
-            }
-        return None
+    if row and verify_password(password, row["password_hash"]):
+        return {"interviewer_id": row["interviewer_id"], "full_name": row["full_name"]}
+    return None
 
 
 def get_active_job_postings() -> list[dict]:
     with connection() as conn:
-        return conn.execute(
-            """
-            SELECT id, title, description, created_at
-            FROM job_postings
-            WHERE is_active = TRUE
-            ORDER BY created_at DESC
-            """
-        ).fetchall()
+        return [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT id, title, description, created_at
+                FROM job_postings WHERE is_active = 1
+                ORDER BY created_at DESC
+                """
+            )
+        ]
 
 
 def save_job_posting(title: str, description: str) -> None:
@@ -238,87 +205,30 @@ def save_job_posting(title: str, description: str) -> None:
         conn.execute(
             """
             INSERT INTO job_postings (title, description)
-            VALUES (%s, %s)
-            ON CONFLICT (title) DO UPDATE SET description = EXCLUDED.description,
-                is_active = TRUE
+            VALUES (?, ?)
+            ON CONFLICT(title) DO UPDATE SET
+                description = excluded.description, is_active = 1
             """,
             (title, description),
         )
 
 
-def create_invitation(token: str, job_id: int, created_by: str, expires_in_hours: int) -> dict:
-    with connection() as conn:
-        return conn.execute(
-            """
-            INSERT INTO interview_invitations
-                (token_hash, job_id, created_by, expires_at)
-            VALUES (%s, %s, %s, NOW() + (%s * INTERVAL '1 hour'))
-            RETURNING invitation_id, job_id, expires_at
-            """,
-            (hash_invitation_token(token), job_id, created_by, expires_in_hours),
-        ).fetchone()
-
-
-def get_public_invitation(token: str) -> dict | None:
-    with connection() as conn:
-        return conn.execute(
-            """
-            SELECT i.invitation_id, i.job_id, i.expires_at, j.title, j.description
-            FROM interview_invitations i
-            JOIN job_postings j ON j.id = i.job_id
-            WHERE i.token_hash = %s AND i.used_at IS NULL
-                AND i.expires_at > NOW() AND j.is_active = TRUE
-            """,
-            (hash_invitation_token(token),),
-        ).fetchone()
-
-
-def register_public_candidate(
-    token: str, full_name: str, email: str, password: str
-) -> dict | None:
-    with connection() as conn:
-        invitation = conn.execute(
-            """
-            SELECT invitation_id, job_id
-            FROM interview_invitations
-            WHERE token_hash = %s AND used_at IS NULL AND expires_at > NOW()
-            FOR UPDATE
-            """,
-            (hash_invitation_token(token),),
-        ).fetchone()
-        if invitation is None:
-            return None
-        candidate_id = email.strip().lower()
-        inserted = conn.execute(
-            """
-            INSERT INTO candidate_accounts (candidate_id, password_hash, full_name)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (candidate_id) DO UPDATE
-                SET full_name = EXCLUDED.full_name,
-                    password_hash = EXCLUDED.password_hash
-            RETURNING candidate_id, full_name
-            """,
-            (candidate_id, hash_password(password), full_name.strip()),
-        ).fetchone()
-        conn.execute(
-            "UPDATE interview_invitations SET used_at = NOW() WHERE invitation_id = %s",
-            (invitation["invitation_id"],),
-        )
-        return {**inserted, "job_id": invitation["job_id"]}
-
-
 def get_live_interviews() -> list[dict]:
     with connection() as conn:
-        return conn.execute(
-            "SELECT * FROM live_interviews WHERE status = 'live' ORDER BY updated_at DESC"
-        ).fetchall()
+        return [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM live_interviews WHERE status = 'live' ORDER BY updated_at DESC"
+            )
+        ]
 
 
 def get_live_interview(session_id: str) -> dict | None:
     with connection() as conn:
-        return conn.execute(
-            "SELECT * FROM live_interviews WHERE session_id = %s", (session_id,)
+        row = conn.execute(
+            "SELECT * FROM live_interviews WHERE session_id = ?", (session_id,)
         ).fetchone()
+        return dict(row) if row else None
 
 
 def save_live_frame(session_id: str, image: bytes) -> None:
@@ -326,9 +236,9 @@ def save_live_frame(session_id: str, image: bytes) -> None:
         conn.execute(
             """
             INSERT INTO live_interview_frames (session_id, image)
-            VALUES (%s, %s)
-            ON CONFLICT (session_id) DO UPDATE
-            SET image = EXCLUDED.image, updated_at = NOW()
+            VALUES (?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                image = excluded.image, updated_at = CURRENT_TIMESTAMP
             """,
             (session_id, image),
         )
@@ -337,25 +247,22 @@ def save_live_frame(session_id: str, image: bytes) -> None:
 def get_live_frame(session_id: str) -> bytes | None:
     with connection() as conn:
         row = conn.execute(
-            "SELECT image FROM live_interview_frames WHERE session_id = %s",
+            "SELECT image FROM live_interview_frames WHERE session_id = ?",
             (session_id,),
         ).fetchone()
         return bytes(row["image"]) if row else None
 
 
 def start_live_interview(
-    session_id: str,
-    candidate_id: str,
-    candidate_name: str,
-    question: str,
-    question_index: int,
+    session_id: str, candidate_id: str, candidate_name: str,
+    question: str, question_index: int,
 ) -> None:
     with connection() as conn:
         conn.execute(
             """
-            INSERT INTO live_interviews
+            INSERT OR REPLACE INTO live_interviews
             (session_id, candidate_id, candidate_name, question, question_index)
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (?, ?, ?, ?, ?)
             """,
             (session_id, candidate_id, candidate_name, question, question_index),
         )
@@ -369,11 +276,10 @@ def update_live_interview(session_id: str, **fields: Any) -> None:
     changes = {key: value for key, value in fields.items() if key in allowed}
     if not changes:
         return
-    assignments = ", ".join(f"{key} = %s" for key in changes)
+    assignments = ", ".join(f"{key} = ?" for key in changes)
     with connection() as conn:
         conn.execute(
-            f"UPDATE live_interviews SET {assignments}, updated_at = NOW() "
-            "WHERE session_id = %s",
+            f"UPDATE live_interviews SET {assignments}, updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
             (*changes.values(), session_id),
         )
 
@@ -395,52 +301,63 @@ def approve_pending_question(session_id: str, question: str | None = None) -> No
 
 
 def save_integrity_flag(
-    session_id: str,
-    flag_type: str,
-    detail: str,
-    severity: str,
-    confidence: float,
-    timestamp: str,
+    session_id: str, flag_type: str, detail: str, severity: str,
+    confidence: float, timestamp: str,
 ) -> dict:
     with connection() as conn:
-        return conn.execute(
+        cursor = conn.execute(
             """
             INSERT INTO integrity_flags
-                (session_id, flag_type, detail, severity, confidence, timestamp)
-            VALUES (%s, %s, %s, %s, %s, %s::timestamptz)
-            RETURNING id, session_id, flag_type, detail, severity, confidence,
-                timestamp, review_status, review_note, reviewed_at
+            (session_id, flag_type, detail, severity, confidence, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (session_id, flag_type, detail, severity, confidence, timestamp),
+        )
+        row = conn.execute(
+            "SELECT * FROM integrity_flags WHERE id = ?", (cursor.lastrowid,)
         ).fetchone()
+        return dict(row)
 
 
 def get_session_flags(session_id: str) -> list[dict]:
     with connection() as conn:
-        return conn.execute(
-            """
-            SELECT id, session_id, flag_type, detail, severity, confidence,
-                timestamp, review_status, review_note, reviewed_at
-            FROM integrity_flags
-            WHERE session_id = %s
-            ORDER BY timestamp DESC, id DESC
-            """,
-            (session_id,),
-        ).fetchall()
+        return [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT * FROM integrity_flags
+                WHERE session_id = ? ORDER BY timestamp DESC, id DESC
+                """,
+                (session_id,),
+            )
+        ]
 
 
 def review_integrity_flag(
     session_id: str, flag_id: int, review_status: str, review_note: str
 ) -> dict | None:
+    reviewed_at = None if review_status == "open" else "CURRENT_TIMESTAMP"
     with connection() as conn:
-        return conn.execute(
-            """
-            UPDATE integrity_flags
-            SET review_status = %s, review_note = %s,
-                reviewed_at = CASE WHEN %s = 'open' THEN NULL ELSE NOW() END
-            WHERE id = %s AND session_id = %s
-            RETURNING id, session_id, flag_type, detail, severity, confidence,
-                timestamp, review_status, review_note, reviewed_at
-            """,
-            (review_status, review_note, review_status, flag_id, session_id),
+        if reviewed_at is None:
+            conn.execute(
+                """
+                UPDATE integrity_flags
+                SET review_status = ?, review_note = ?, reviewed_at = NULL
+                WHERE id = ? AND session_id = ?
+                """,
+                (review_status, review_note, flag_id, session_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE integrity_flags
+                SET review_status = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND session_id = ?
+                """,
+                (review_status, review_note, flag_id, session_id),
+            )
+        row = conn.execute(
+            "SELECT * FROM integrity_flags WHERE id = ? AND session_id = ?",
+            (flag_id, session_id),
         ).fetchone()
+        return dict(row) if row else None

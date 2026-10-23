@@ -1,216 +1,176 @@
-# InterviewIQ — AI-Powered Interview Assessment System
+# InterviewIQ - Desktop Interview Assessment System
 
-Academic project (Computer Engineering, group project) exploring **explainability + bias auditing**
-combined with **integrity / AI-assisted-answer detection** for automated interview assessment tools.
+InterviewIQ is a desktop-based interview assessment system for candidates and
+interviewers. It combines live interview capture, speech-to-text, competency
+scoring, explainability, fairness analysis, reporting, and integrity
+monitoring.
 
-## Current status: v0.1 — App Shell + Interview Session MVP
+The system has no browser client, public web registration flow, Render
+deployment, or cloud database. Both roles use the same desktop application.
 
-What works right now:
-- Full desktop app shell (sidebar navigation, 6 sections)
-- Candidate sign-in before accessing the candidate dashboard
-- Live webcam preview on the "New Interview" screen (via OpenCV)
-- Question flow (next/previous navigation through question bank)
-- Microphone recording with local Whisper speech-to-text in the transcript panel
-- Dashboard with stat cards (currently static — wire to real data next)
-- Placeholder pages for Reports, Bias Audit, and Integrity Log describing exactly what
-  each will contain once the backend pipelines are built
+## Architecture
 
-## Project structure
-
+```text
+Candidate desktop PC ── local network ── Interviewer desktop PC
+                                      │
+                              InterviewIQ desktop app
+                                      │
+                              Local FastAPI + SQLite
 ```
-interview-assessment-system/
-├── app/
-│   ├── main.py              # Entry point
-│   ├── core/
-│   │   └── question_bank.py # Interview questions (swap for DB later)
-│   ├── models/               # (empty) ML models will live here — scoring, SHAP, gaze, etc.
-│   ├── ui/
-│   │   ├── main_window.py   # Main window + page routing
-│   │   ├── sidebar.py       # Navigation sidebar
-│   │   └── pages/
-│   │       ├── dashboard_page.py
-│   │       ├── interview_page.py    # Core interview session screen
-│   │       └── placeholder_page.py  # Reusable "coming soon" page
-│   └── utils/
-│       └── theme.py         # Colors + QSS stylesheet (single source of design truth)
-├── assets/                   # Icons/images (empty for now)
-├── data/                     # Session recordings/transcripts will be stored here
-├── tests/                    # (empty) add unit tests here
-└── requirements.txt
-```
+
+The interviewer PC runs the local API and shared SQLite database for a
+two-PC interview. The candidate PC runs the same application and connects to
+the interviewer's private LAN address. For a single-PC demonstration, use
+local SQLite without starting the API.
+
+## Desktop roles
+
+### Candidate
+
+- Sign in to the candidate desktop application.
+- Complete assigned interview questions.
+- Use the webcam and microphone.
+- Record answers and generate local Whisper transcripts.
+- Submit interview state and integrity signals to the interviewer PC.
+- Run local checks for USB storage, serial devices, remote-access processes,
+  and known remote-access ports.
+- Record when the interview window loses focus because the candidate switches
+  to another application or window. This is an advisory integrity signal, not
+  automatic proof of misconduct.
+
+### Interviewer
+
+- Sign in to the interviewer desktop application.
+- Create jobs and candidate accounts.
+- Monitor active interviews over the local network.
+- View the latest candidate camera frame.
+- Approve the next question.
+- Review integrity flags.
+- Inspect assessment, explainability, fairness, and PDF reports.
 
 ## Setup
 
-```bash
+```powershell
 python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
+.\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 python -m app.main
 ```
 
-Requires a webcam for the interview screen to show a live preview (click "Start Camera").
-If no webcam is available it will show an error message but the rest of the app still works.
-
-The local demo candidate account is `candidate01` with password `interview123`.
-For local interviewer access, set credentials before starting the app:
-
-```powershell
-$env:INTERVIEWER_ID = "interviewer01"
-$env:INTERVIEWER_PASSWORD = "choose-a-local-password"
-python -m app.main --role interviewer
-```
-
-There is no fixed default interviewer password. In shared remote mode, use the
-interviewer ID and password configured in Render as `INTERVIEWER_ID` and
-`INTERVIEWER_PASSWORD`.
-
-## Start the API locally
-
-The API is the first deployment layer for sharing live interview state between
-the candidate and interviewer applications. It currently uses the existing
-SQLite database, so it runs locally without cloud credentials. The database
-layer can later be replaced with a managed PostgreSQL connection without
-changing the HTTP contract.
-
-Install the API dependencies and start the service:
-
-```powershell
-pip install -r requirements.txt
-python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
-```
-
-The cloud container uses the smaller [`requirements-api.txt`](requirements-api.txt)
-file because it does not need desktop camera, audio, or Qt packages.
-
-Verify it from the host computer:
-
-```powershell
-curl http://127.0.0.1:8000/health
-```
-
-Interactive API documentation is available at `/docs`.
-
-## Deploy the API to Render
-
-The repository includes a `Dockerfile` and `render.yaml` for deploying the
-API as a Render web service. The deployed API uses PostgreSQL for shared,
-persistent interview data. Desktop clients may continue using local SQLite
-when remote mode is disabled.
-
-1. Rotate any API key that was previously stored in `data/settings.json`.
-2. Push the repository to GitHub.
-3. In Render, choose **New > Blueprint**, select the repository, and apply
-   `render.yaml`.
-4. Set `CORS_ORIGINS` to the exact URL of the future frontend, or use `*`
-   temporarily for API-only testing.
-5. Set `GROQ_API_KEY` using a newly generated key in Render's environment
-   settings. Never commit it to the repository.
-6. Set `DATABASE_URL` to the pooled connection string from Neon. Keep it as a
-   Render secret and use the `postgresql://` or `postgres://` URL provided by
-   Neon.
-7. Set `AUTH_SECRET` to a long random value. Also set `INTERVIEWER_ID`,
-   `INTERVIEWER_PASSWORD`, and optionally `INTERVIEWER_NAME`. These values
-   create the initial interviewer account on first startup; never use the old
-   demo credentials.
-8. After deployment, verify:
-
-```text
-https://YOUR-SERVICE.onrender.com/health
-https://YOUR-SERVICE.onrender.com/health/ready
-https://YOUR-SERVICE.onrender.com/docs
-```
-
-The API base URL for future desktop/frontend clients will be:
-
-```text
-https://YOUR-SERVICE.onrender.com/api/v1
-```
-
-The deployed service also serves a candidate registration page at `/`. An
-interviewer creates an invitation through `POST /api/v1/public/invitations`
-with an authenticated interviewer token and a job ID. Share the returned URL:
-
-```text
-https://YOUR-SERVICE.onrender.com/?token=RETURNED_TOKEN
-```
-
-The invitation expires after the requested period (default 72 hours) and can
-be used once. The public page never exposes the invitation token in server
-logs beyond the URL request, so treat the link as confidential.
-
-After registration, the page can start a browser interview, request camera
-permission, publish the latest compressed preview frame, and share a typed
-answer with the interviewer monitor. Browser mode cannot inspect running
-processes or connected USB devices; use the native candidate client when
-those host-integrity checks are required. Camera and device inspection require
-candidate consent.
-
-## Candidate device-monitoring policy
-
-The native candidate client checks for USB storage, physical serial devices,
-known remote-access processes, and known remote-access ports. These checks
-produce review signals; they do not prove misconduct or automatically reject a
-candidate. Bluetooth virtual COM ports are ignored because they are commonly
-created by normal operating-system pairing.
-
-If an organization has an approved serial device that should not be reported,
-set this variable on the candidate PC as a comma-separated list of matching
-device markers:
-
-```powershell
-$env:INTERVIEWIQ_ALLOWED_SERIAL = "Approved Reader,COM7"
-```
-
-Environment checks run at interview start and periodically during a live
-interview. Camera and host checks are performed locally because browser
-JavaScript cannot inspect operating-system processes or hardware reliably.
-
-The live monitor stores only the latest compressed JPEG frame per active
-session in the configured PostgreSQL database. Frames are replaced on upload,
-are not an interview recording, and are deleted automatically when the
-interview session is removed. The media endpoints require the candidate or
-interviewer access token appropriate to the operation.
-
-## Use two desktop PCs with the shared Render API
-
-The desktop app uses local SQLite by default. To make a candidate PC and an
-interviewer PC share accounts, jobs, and live interview state, configure both
-PCs before starting the app:
-
-```powershell
-$env:INTERVIEWIQ_BACKEND_MODE = "remote"
-$env:INTERVIEWIQ_API_URL = "https://interviewiq-api-736y.onrender.com/api/v1"
-python -m app.main --role interviewer
-```
-
-On the candidate PC, use the same two environment variables and start:
+The application opens a role selector. Choose **Candidate** or
+**Interviewer**. The optional command-line role is available for shortcuts:
 
 ```powershell
 python -m app.main --role candidate
+python -m app.main --role interviewer
 ```
 
-The Render URL must be replaced if your service has a different URL. The
-Settings page also supports selecting **Shared Render API** and saving the
-same URL after logging in.
+The current temporary demo accounts are hardcoded for development:
 
-## Architecture (planned modules)
+```text
+Interviewer ID: interviewer01
+Interviewer password: interviewer123
+Candidate ID: candidate01
+Candidate password: interview123
+```
 
-1. **Interview Engine** (`app/ui/pages/interview_page.py`) — question flow, webcam/mic capture ✅ MVP done
-2. **Transcription & NLP Scoring** — Whisper for speech-to-text, answer relevance scoring — not started
-3. **Explainability Layer** — SHAP/LIME overlays explaining each score — not started
-4. **Bias Audit Module** — fairness metrics across proxy groups — not started
-5. **Integrity Detection Module** — gaze tracking, response-latency anomalies, AI-text fingerprinting
-   — not started (this is the core novel research contribution)
-6. **Reporting Dashboard** — candidate + evaluator views — static shell only
+## Local-only mode
 
-## Next steps
+Use **This PC (local SQLite)** in Settings when testing on one computer. This
+mode needs no API, network, PostgreSQL, Docker, or cloud service.
 
-- Wire microphone recording + Whisper transcription into `interview_page.py`
-- Add `app/models/scoring.py` for a first-pass answer scoring model
-- Add `app/models/explainability.py` using SHAP against the scoring model
-- Design gaze-tracking approach (mediapipe face mesh) for the integrity module
-- Persist session data to `data/` (SQLite recommended over flat files)
+Both role windows can be started on the same computer:
 
-## Team
+```powershell
+python -m app.main
+python -m app.main
+```
 
-Manthan Gharat, Atharv Shigwan, Riddhi Verma, Ayush — under faculty supervision.
+Select a different role in each window.
+
+## Local-network mode
+
+For two computers, the interviewer PC hosts the API and its SQLite database.
+Install the API dependencies on the interviewer PC:
+
+```powershell
+pip install -r requirements-api.txt
+$env:INTERVIEWIQ_API_DB = "C:\InterviewIQ\data\network.db"
+$env:AUTH_SECRET = "local-development-secret"
+python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
+```
+
+The database file is created automatically. Verify the service:
+
+```powershell
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/health/ready
+```
+
+On the interviewer PC, open the desktop application and select the
+**Interviewer** role. On the candidate PC, open the same application and
+select the **Candidate** role. On the candidate PC, open Settings, select
+**Local network API**, and set the API URL to the interviewer's LAN address:
+
+```text
+http://192.168.1.100:8000/api/v1
+```
+
+Allow port `8000` through the interviewer PC's private-network firewall. Both
+PCs must be connected to the same private network. The API must not be exposed
+to the public internet.
+
+To find the interviewer PC's LAN address:
+
+```powershell
+ipconfig
+```
+
+Use the **IPv4 Address** from the active Wi-Fi or Ethernet adapter.
+
+## Two-PC test sequence
+
+1. Start the API on the interviewer PC.
+2. Verify `/health` and `/health/ready`.
+3. Start InterviewIQ on the interviewer PC and select **Interviewer**.
+4. Start InterviewIQ on the candidate PC and select **Candidate**.
+5. Configure the candidate's **Local network API** URL.
+6. Sign in with the temporary accounts above.
+7. Create/select a job on the interviewer PC.
+8. Start the interview on the candidate PC.
+9. Confirm the interviewer sees the live session, transcript, camera frame,
+   question updates, and integrity events.
+10. Approve questions from the interviewer desktop.
+
+## Project structure
+
+```text
+app/
+  candidate/       Camera, microphone, resume, and integrity capture
+  core/            SQLite, settings, models, question bank, LAN API client
+  engine/          Transcription, matching, scoring, explainability, fairness
+  reports/         Analytics and PDF export
+  ui/              Candidate and interviewer desktop windows
+api/               Local-network FastAPI service
+data/              SQLite database, recordings, profiles, and reports
+docs/              Data contracts and module ownership
+```
+
+## Data and privacy
+
+- Local-only mode stores data in `data/app.db`.
+- Local-network mode stores shared interview state in the SQLite database
+  configured on the interviewer PC.
+- Camera frames are used for live monitoring and the API keeps only the latest
+  frame for an active session.
+- Integrity checks are review signals, not automatic proof of misconduct.
+- The `tab_switch` integrity tag records interview-window focus loss
+  during an active candidate interview.
+- The interviewer API uses the temporary development secret shown above.
+- Change the secret and demo credentials before production use.
+- Keep API secrets and LLM keys out of source control.
+
+## Team documentation
+
+- [Data contracts](docs/INTERFACES.md)
+- [Module ownership](docs/OWNERSHIP.md)

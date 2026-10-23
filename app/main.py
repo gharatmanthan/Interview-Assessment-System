@@ -16,16 +16,44 @@ def _global_exception_hook(exctype, value, tb):
 
 sys.excepthook = _global_exception_hook
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 from PySide6.QtGui import QFont
 
 from app.ui.main_window import MainWindow
 from app.utils.theme import STYLESHEET
 
 
+class RoleSelector(QDialog):
+    def __init__(self):
+        super().__init__()
+        self.role = None
+        self.setWindowTitle("InterviewIQ - Select role")
+        self.setMinimumWidth(420)
+        layout = QVBoxLayout(self)
+        title = QLabel("How will you use InterviewIQ?")
+        title.setObjectName("LoginTitle")
+        layout.addWidget(title)
+        layout.addWidget(QLabel("Choose a role to open the desktop workspace."))
+        buttons = QHBoxLayout()
+        for role, label in (("candidate", "Candidate"), ("interviewer", "Interviewer")):
+            button = QPushButton(label)
+            button.setMinimumHeight(48)
+            button.setObjectName("PrimaryButton")
+            button.clicked.connect(lambda checked=False, value=role: self._choose(value))
+            buttons.addWidget(button)
+        layout.addLayout(buttons)
+
+    def _choose(self, role):
+        self.role = role
+        self.accept()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run InterviewIQ.")
-    parser.add_argument("--role", choices=("candidate", "interviewer"), default="candidate")
+    parser.add_argument(
+        "--role", choices=("candidate", "interviewer"),
+        help="Skip the role selector (useful for shortcuts and testing).",
+    )
     args = parser.parse_args()
 
     app = QApplication(sys.argv)
@@ -34,6 +62,13 @@ def main():
 
     default_font = QFont("Segoe UI", 10)
     app.setFont(default_font)
+
+    selector = None
+    if args.role is None:
+        selector = RoleSelector()
+        if selector.exec() != QDialog.Accepted:
+            return
+        args.role = selector.role
 
     window = MainWindow(user_role=args.role)
     window.show()

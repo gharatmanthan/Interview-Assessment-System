@@ -437,7 +437,7 @@ class InterviewerInterviewPage(QWidget):
             self._video_retry_at = now + 1.0
 
         # The WebSocket is low latency when both clients use it.  Polling the
-        # stored latest JPEG also supports browser candidates and gracefully
+        # stored latest JPEG also supports candidates that temporarily reconnect
         # survives proxies that do not keep WebSockets open.
         if now >= self._next_frame_poll_at:
             self._request_frame(self._video_session_id)

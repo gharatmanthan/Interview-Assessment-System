@@ -18,7 +18,7 @@ DEFAULTS = {
     "llm_api_key": "",
     "export_dir": str(Path.home() / "Documents"),
     "backend_mode": "local",
-    "remote_api_url": "",
+    "lan_api_url": "",
 }
 
 
@@ -30,6 +30,13 @@ def load_settings() -> dict:
             data = json.load(f)
         merged = dict(DEFAULTS)
         merged.update(data)
+        # Do not carry forward the old cloud/remote setting into the desktop
+        # LAN architecture.
+        if merged.get("backend_mode") == "remote":
+            merged["backend_mode"] = "local"
+        if not merged.get("lan_api_url"):
+            merged["lan_api_url"] = ""
+        merged.pop("remote_api_url", None)
         return merged
     except (json.JSONDecodeError, OSError):
         return dict(DEFAULTS)

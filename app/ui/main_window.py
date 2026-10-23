@@ -122,6 +122,15 @@ class MainWindow(QMainWindow):
     def _navigate(self, key):
         page = self.pages.get(key)
         if page:
+            if self.user_role == "candidate" and key != "interview":
+                interview_page = self.pages.get("interview")
+                if (
+                    interview_page is not None
+                    and getattr(interview_page, "session_id", None)
+                ):
+                    interview_page.record_application_switch(
+                        "Candidate navigated away from the active interview page."
+                    )
             if key == "reports" and hasattr(page, "refresh"):
                 page.refresh()
             self.stack.setCurrentWidget(page)

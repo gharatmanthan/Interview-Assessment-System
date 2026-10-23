@@ -66,7 +66,3 @@ def decode_token(token: str) -> dict:
         return payload
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError("Invalid access token.") from exc
-
-
-def hash_invitation_token(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()

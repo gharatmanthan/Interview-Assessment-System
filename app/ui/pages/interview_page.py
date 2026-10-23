@@ -9,7 +9,7 @@ import numpy as np
 import sounddevice as sd
 from scipy.io.wavfile import write as write_wav
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit,
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit,
     QSizePolicy, QSlider, QMessageBox
 )
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
@@ -18,7 +18,7 @@ from PySide6.QtGui import QImage, QPixmap
 import cv2
 
 from app.core.question_bank import DEFAULT_QUESTIONS, questions_for_job
-from app.core.models import InterviewSession
+from app.core.models import IntegrityFlag, InterviewSession
 from app.core import db
 from app.candidate.face_recognition import face_match_confidence
 from app.candidate.integrity import EnvironmentIntegrityMonitor, FaceIntegrityMonitor, run_checks
@@ -117,6 +117,8 @@ class InterviewPage(QWidget):
         self._environment_future = None
         self._environment_ticks = 0
         self.session_finished = False
+        self._application_switch_count = 0
+        self._window_was_active = True
 
         root = QVBoxLayout(self)
         root.setContentsMargins(36, 30, 36, 30)
@@ -414,6 +416,8 @@ class InterviewPage(QWidget):
         self.session_id = uuid4().hex
         self.session_started_at = datetime.utcnow()
         self.session_finished = False
+        self._application_switch_count = 0
+        self._window_was_active = True
         self.end_interview_btn.setEnabled(True)
 
         # Determine first question
@@ -565,6 +569,12 @@ class InterviewPage(QWidget):
     def _sync_live_state(self):
         if not self.session_id:
             return
+        window_active = self.window().isActiveWindow()
+        if self._window_was_active and not window_active:
+            self.record_application_switch(
+                "Interview window lost focus; another application or window may have been selected."
+            )
+        self._window_was_active = window_active
         self._environment_ticks += 1
         if self._environment_ticks % 15 == 0 and self._environment_future is None:
             self._environment_future = self._environment_executor.submit(
@@ -602,6 +612,18 @@ class InterviewPage(QWidget):
             self.transcript_box.clear()
             self.record_status.setText("Interviewer sent a follow-up question.")
             self.record_status.setStyleSheet("color: #5B5FEF; font-weight: 600;")
+
+    def record_application_switch(self, detail: str) -> None:
+        if not self.session_id or self.session_finished:
+            return
+        self._application_switch_count += 1
+        self._record_integrity_flags([IntegrityFlag(
+            session_id=self.session_id,
+            flag_type="tab_switch",
+            detail=f"{detail} (event {self._application_switch_count}).",
+            severity="medium",
+            confidence=0.85,
+        )])
 
     def _apply_environment_check(self):
         if self._environment_future is None:

@@ -1,4 +1,4 @@
-"""Small client for the shared Render interview API."""
+"""Client for the shared local-network interview API."""
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -6,8 +6,8 @@ import requests
 import websocket
 
 
-class RemoteApiClient:
-    def __init__(self, base_url: str, timeout: float = 30):
+class LanApiClient:
+    def __init__(self, base_url: str, timeout: float = 5):
         self.base_url = self._normalize_base_url(base_url)
         self.timeout = timeout
         self.access_token = None
@@ -23,8 +23,8 @@ class RemoteApiClient:
         parsed = urlsplit(value)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError(
-                "Remote API URL must look like "
-                "https://your-service.onrender.com/api/v1"
+                "Local network API URL must look like "
+                "http://192.168.1.100:8000/api/v1"
             )
         return value
 

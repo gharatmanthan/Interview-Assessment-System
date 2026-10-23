@@ -13,7 +13,6 @@ import cv2
 from PySide6.QtCore import Qt, QTimer, QThread, QObject, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
-    QApplication,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -70,6 +69,25 @@ class QuestionGeneratorWorker(QObject):
                 self.failed.emit(str(inner))
 
 
+class EnvironmentCheckWorker(QObject):
+    finished = Signal(bool, list)
+
+    def run(self):
+        devices = get_unauthorized_devices()
+        self.finished.emit(not devices, devices)
+
+
+class JobsWorker(QObject):
+    finished = Signal(list)
+    failed = Signal(str)
+
+    def run(self):
+        try:
+            self.finished.emit(db.get_active_job_postings())
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 # ---------------------------------------------------------------------------
 # Main dashboard
 # ---------------------------------------------------------------------------
@@ -95,6 +113,10 @@ class CandidateDashboard(QWidget):
 
         self._gen_thread = None
         self._gen_worker = None
+        self._environment_thread = None
+        self._environment_worker = None
+        self._jobs_thread = None
+        self._jobs_worker = None
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._update_camera)
@@ -249,7 +271,7 @@ class CandidateDashboard(QWidget):
         root.addLayout(start_row)
 
         # Initial checks
-        self.check_environment()
+        QTimer.singleShot(0, self.check_environment)
 
     # ------------------------------------------------------------------
     # Public API
@@ -324,13 +346,42 @@ class CandidateDashboard(QWidget):
 
     def load_jobs(self):
         self.jobs_list.clear()
-        jobs = db.get_active_job_postings()
+        self.jobs_list.addItem("Loading available interviews...")
+        self.jobs_list.item(0).setFlags(Qt.NoItemFlags)
+        if self._jobs_thread is not None and self._jobs_thread.isRunning():
+            return
+        self._jobs_thread = QThread(self)
+        self._jobs_worker = JobsWorker()
+        self._jobs_worker.moveToThread(self._jobs_thread)
+        self._jobs_thread.started.connect(self._jobs_worker.run)
+        self._jobs_worker.finished.connect(self._apply_jobs)
+        self._jobs_worker.failed.connect(self._jobs_failed)
+        self._jobs_worker.finished.connect(self._jobs_thread.quit)
+        self._jobs_worker.failed.connect(self._jobs_thread.quit)
+        self._jobs_thread.finished.connect(self._jobs_finished)
+        self._jobs_thread.finished.connect(self._jobs_worker.deleteLater)
+        self._jobs_thread.finished.connect(self._jobs_thread.deleteLater)
+        self._jobs_thread.start()
+
+    def _jobs_finished(self):
+        self._jobs_thread = None
+        self._jobs_worker = None
+
+    def _apply_jobs(self, jobs):
+        self.jobs_list.clear()
         for job in jobs:
             self.jobs_list.addItem(f"{job['title']}")
             self.jobs_list.item(self.jobs_list.count() - 1).setData(Qt.UserRole, job)
         if not jobs:
             self.jobs_list.addItem("No active job postings available yet.")
             self.jobs_list.item(0).setFlags(Qt.NoItemFlags)
+        self._update_start_state()
+
+    def _jobs_failed(self, message):
+        self.jobs_list.clear()
+        self.jobs_list.addItem("Unable to load interviews. Check the API connection.")
+        self.jobs_list.item(0).setFlags(Qt.NoItemFlags)
+        self.role_lbl.setText(message)
         self._update_start_state()
 
     def _on_job_selected(self):
@@ -355,9 +406,20 @@ class CandidateDashboard(QWidget):
         self.env_badge.setObjectName("StatusPending")
         self.env_badge.style().unpolish(self.env_badge)
         self.env_badge.style().polish(self.env_badge)
-        QApplication.processEvents()
-        devices = get_unauthorized_devices()
-        self.environment_clear = not devices
+        if self._environment_thread is not None and self._environment_thread.isRunning():
+            return
+        self._environment_thread = QThread(self)
+        self._environment_worker = EnvironmentCheckWorker()
+        self._environment_worker.moveToThread(self._environment_thread)
+        self._environment_thread.started.connect(self._environment_worker.run)
+        self._environment_worker.finished.connect(self._apply_environment_result)
+        self._environment_worker.finished.connect(self._environment_thread.quit)
+        self._environment_thread.finished.connect(self._environment_worker.deleteLater)
+        self._environment_thread.finished.connect(self._environment_thread.deleteLater)
+        self._environment_thread.start()
+
+    def _apply_environment_result(self, clear, devices):
+        self.environment_clear = clear
         if devices:
             self.env_badge.setText("Environment: Devices detected")
             self.env_badge.setObjectName("StatusFail")

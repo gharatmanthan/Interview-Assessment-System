@@ -1,7 +1,7 @@
-"""
+﻿"""
 Shared SQLite persistence layer.
 
-Owner: Member C (owns the schema), but every module calls into this —
+Owner: Member C (owns the schema), but every module calls into this â€”
 that's expected and fine. The rule is: add a new save_x()/get_x() function
 here if you need one, don't reach into another file's internals.
 
@@ -17,10 +17,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from dataclasses import asdict
 
-from app.core.remote_api import RemoteApiClient
+from app.core.lan_api import LanApiClient
 from app.core.settings_store import load_settings
 
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "app.db"
+DEFAULT_INTERVIEWER_ID = "interviewer01"
+DEFAULT_INTERVIEWER_PASSWORD = "interviewer123"
+DEFAULT_INTERVIEWER_NAME = "Local Interviewer"
 _frame_upload_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="frame-upload")
 _frame_upload_future = None
 _video_receive_executor = ThreadPoolExecutor(
@@ -30,8 +33,8 @@ _integrity_upload_executor = ThreadPoolExecutor(
     max_workers=1, thread_name_prefix="integrity-upload"
 )
 logger = logging.getLogger(__name__)
-_remote_client_instance = None
-_remote_client_url = None
+_lan_client_instance = None
+_lan_client_url = None
 
 
 def _log_background_failure(future):
@@ -40,23 +43,23 @@ def _log_background_failure(future):
         logger.error("Background integrity event upload failed: %s", error)
 
 
-def _remote_client() -> RemoteApiClient | None:
-    global _remote_client_instance, _remote_client_url
+def _lan_client() -> LanApiClient | None:
+    global _lan_client_instance, _lan_client_url
     settings = load_settings()
     backend_mode = os.environ.get(
         "INTERVIEWIQ_BACKEND_MODE", settings.get("backend_mode", "local")
     ).strip().lower()
-    if backend_mode != "remote":
+    if backend_mode != "lan":
         return None
     base_url = os.environ.get(
-        "INTERVIEWIQ_API_URL", settings.get("remote_api_url", "")
+        "INTERVIEWIQ_LAN_API_URL", settings.get("lan_api_url", "")
     ).strip()
     if not base_url:
-        raise RuntimeError("Remote backend is enabled but remote API URL is empty.")
-    if _remote_client_instance is None or _remote_client_url != base_url:
-        _remote_client_instance = RemoteApiClient(base_url)
-        _remote_client_url = base_url
-    return _remote_client_instance
+        raise RuntimeError("LAN backend is enabled but the LAN API URL is empty.")
+    if _lan_client_instance is None or _lan_client_url != base_url:
+        _lan_client_instance = LanApiClient(base_url)
+        _lan_client_url = base_url
+    return _lan_client_instance
 
 
 def get_connection():
@@ -156,7 +159,7 @@ def init_db():
     default_jobs = [
         (
             "Python Backend Developer",
-            "Build reliable REST APIs and backend services with Python. Work with FastAPI or Django, PostgreSQL, automated tests, Git, and cloud deployment. We are looking for strong problem-solving, clean coding, and API design skills.",
+            "Build reliable REST APIs and backend services with Python. Work with FastAPI or Django, SQLite, automated tests, Git, and local deployment. We are looking for strong problem-solving, clean coding, and API design skills.",
         ),
         (
             "Frontend React Developer",
@@ -220,7 +223,7 @@ def save_session(session):
 
 
 def authenticate_candidate(candidate_id, password):
-    remote = _remote_client()
+    remote = _lan_client()
     if remote:
         return remote.authenticate_candidate(candidate_id, password)
     conn = get_connection()
@@ -234,18 +237,22 @@ def authenticate_candidate(candidate_id, password):
 
 
 def authenticate_interviewer(interviewer_id, password):
-    remote = _remote_client()
+    remote = _lan_client()
     if remote:
         return remote.authenticate_interviewer(interviewer_id, password)
-    expected_id = os.environ.get("INTERVIEWER_ID", "").strip()
-    expected_password = os.environ.get("INTERVIEWER_PASSWORD", "")
-    if expected_id and expected_password and interviewer_id == expected_id and password == expected_password:
-        return {"interviewer_id": interviewer_id, "full_name": os.environ.get("INTERVIEWER_NAME", "Interviewer")}
+    if (
+        interviewer_id == DEFAULT_INTERVIEWER_ID
+        and password == DEFAULT_INTERVIEWER_PASSWORD
+    ):
+        return {
+            "interviewer_id": DEFAULT_INTERVIEWER_ID,
+            "full_name": DEFAULT_INTERVIEWER_NAME,
+        }
     return None
 
 
 def create_candidate_account(candidate_id, password, full_name):
-    remote = _remote_client()
+    remote = _lan_client()
     if remote:
         return remote.create_candidate_account(candidate_id, password, full_name)
     conn = get_connection()
@@ -264,7 +271,7 @@ def create_candidate_account(candidate_id, password, full_name):
 
 
 def get_candidate_accounts():
-    remote = _remote_client()
+    remote = _lan_client()
     if remote:
         return remote.get_candidate_accounts()
     conn = get_connection()
@@ -319,7 +326,7 @@ def save_integrity_flag(
             "severity": severity,
             "timestamp": timestamp,
         }
-    remote = _remote_client()
+    remote = _lan_client()
     if remote:
         event_timestamp = values["timestamp"]
         if hasattr(event_timestamp, "isoformat"):
@@ -394,7 +401,7 @@ def get_all_sessions():
 
 
 def start_live_interview(session_id, candidate_id, candidate_name, question, question_index=0):
-    remote = _remote_client()
+    remote = _lan_client()
     if remote:
         remote.start_live_interview(
             session_id, candidate_id, candidate_name, question, question_index
@@ -420,7 +427,7 @@ def update_live_interview(session_id, **fields):
     changes = {key: value for key, value in fields.items() if key in allowed}
     if not changes:
         return
-    remote = _remote_client()
+    remote = _lan_client()
     if remote:
         remote.update_live_interview(session_id, **changes)
         return
@@ -441,8 +448,8 @@ def save_pending_question(session_id: str, question: str) -> None:
 
 
 def approve_pending_question(session_id: str, question: str | None = None) -> None:
-    """Approve (and optionally overwrite) the pending question — makes it visible to the candidate."""
-    remote = _remote_client()
+    """Approve (and optionally overwrite) the pending question â€” makes it visible to the candidate."""
+    remote = _lan_client()
     if remote:
         remote.approve_pending_question(session_id, question)
         return
@@ -480,7 +487,7 @@ def get_pending_question(session_id: str) -> dict | None:
 
 
 def get_live_interviews():
-    remote = _remote_client()
+    remote = _lan_client()
     if remote:
         return remote.list_live_interviews()
     conn = get_connection()
@@ -492,7 +499,7 @@ def get_live_interviews():
 
 
 def get_live_interview(session_id):
-    remote = _remote_client()
+    remote = _lan_client()
     if remote:
         return remote.get_live_interview(session_id)
     conn = get_connection()
@@ -505,7 +512,7 @@ def get_live_interview(session_id):
 
 def upload_live_frame(session_id: str, frame: bytes) -> None:
     global _frame_upload_future
-    remote = _remote_client()
+    remote = _lan_client()
     if remote:
         if _frame_upload_future is None or _frame_upload_future.done():
             _frame_upload_future = _frame_upload_executor.submit(
@@ -518,7 +525,7 @@ def upload_live_frame(session_id: str, frame: bytes) -> None:
 
 
 def stream_live_video(session_id: str, on_frame) -> None:
-    remote = _remote_client()
+    remote = _lan_client()
     if remote is not None:
         def receive_remote():
             try:
@@ -550,7 +557,7 @@ def stream_live_video(session_id: str, on_frame) -> None:
 
 
 def download_live_frame(session_id: str) -> bytes | None:
-    remote = _remote_client()
+    remote = _lan_client()
     if remote:
         return remote.download_frame(session_id)
     frame_path = Path("data") / "live_frames" / f"{session_id}.jpg"
@@ -558,7 +565,7 @@ def download_live_frame(session_id: str) -> bytes | None:
 
 
 def save_job_posting(title: str, description: str):
-    remote = _remote_client()
+    remote = _lan_client()
     if remote:
         return remote.save_job_posting(title, description)
     conn = get_connection()
@@ -571,7 +578,7 @@ def save_job_posting(title: str, description: str):
 
 
 def get_active_job_postings():
-    remote = _remote_client()
+    remote = _lan_client()
     if remote:
         return remote.get_active_job_postings()
     conn = get_connection()
@@ -599,7 +606,7 @@ def get_session_scores(session_id):
 
 
 def get_session_flags(session_id):
-    remote = _remote_client()
+    remote = _lan_client()
     if remote:
         return remote.get_session_flags(session_id)
     conn = get_connection()
@@ -611,7 +618,7 @@ def get_session_flags(session_id):
 
 
 def review_integrity_flag(session_id, flag_id, review_status, review_note=""):
-    remote = _remote_client()
+    remote = _lan_client()
     if remote:
         return remote.review_integrity_flag(
             session_id, flag_id, review_status, review_note

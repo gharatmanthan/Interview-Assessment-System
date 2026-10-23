@@ -1,4 +1,4 @@
-"""Read-only diagnostic for InterviewIQ remote live monitoring.
+"""Read-only diagnostic for InterviewIQ local-network live monitoring.
 
 Run on the machine that shows the empty "Live Interview Monitor":
 
@@ -6,7 +6,7 @@ Run on the machine that shows the empty "Live Interview Monitor":
 
 It prints:
   1. the local backend mode / remote URL (no secrets),
-  2. whether the Render interviewer login succeeds,
+  2. whether the local-network interviewer login succeeds,
   3. whether /interviews returns live sessions,
   4. whether /candidates returns registered candidates,
   5. whether a camera frame exists for the live session.
@@ -23,8 +23,8 @@ import sys
 
 import requests
 
-DEFAULT_BASE = "https://interviewiq-api-736y.onrender.com/api/v1"
-TIMEOUT = 90  # Render free tier can cold-start for ~60 s
+DEFAULT_BASE = "http://127.0.0.1:8000/api/v1"
+TIMEOUT = 15
 
 
 def show_local_settings() -> None:
@@ -43,11 +43,11 @@ def show_local_settings() -> None:
         print(f"unreadable  : {exc}")
         return
     print(f"backend_mode: {data.get('backend_mode')!r}")
-    print(f"remote_url  : {data.get('remote_api_url')!r}")
+    print(f"lan_api_url : {data.get('lan_api_url')!r}")
     print(f"camera_index: {data.get('camera_index')!r}")
     print(
-        "\nIf backend_mode is 'local', this app never contacts Render.\n"
-        "On the interviewer machine it must be 'remote' with the /api/v1 URL.\n"
+        "\nIf backend_mode is 'local', this app uses its local SQLite database.\n"
+        "For two PCs it must be 'lan' with the interviewer's /api/v1 URL.\n"
     )
 
 
@@ -71,7 +71,7 @@ def main() -> int:
         return 0
 
     print("=" * 66)
-    print("RENDER SERVICE")
+    print("LOCAL NETWORK API")
     print("=" * 66)
     base = input(f"Base URL [{DEFAULT_BASE}]: ").strip() or DEFAULT_BASE
     base = base.rstrip("/")
@@ -86,8 +86,8 @@ def main() -> int:
         response, body = ready
         print(f"/health/ready -> HTTP {response.status_code} {body}")
 
-    identity = input("Render interviewer ID: ").strip()
-    password = getpass.getpass("Render interviewer password: ")
+    identity = input("Interviewer ID: ").strip()
+    password = getpass.getpass("Interviewer password: ")
 
     print("\n[1] POST /auth/interviewer")
     result = request_json(
@@ -101,8 +101,8 @@ def main() -> int:
     if response.status_code != 200:
         print(f"    body: {body}")
         print(
-            "\n    LOGIN FAILED. The Render interviewer account does not accept\n"
-            "    these credentials. It is seeded on the server from the Render\n"
+            "\n    LOGIN FAILED. The local API interviewer account does not accept\n"
+            "    these credentials. It is seeded on the API host from the\n"
             "    environment variables INTERVIEWER_ID / INTERVIEWER_PASSWORD.\n"
             "    Note: after the first deploy, changing those variables does NOT\n"
             "    update the stored password (ON CONFLICT DO NOTHING)."
@@ -153,9 +153,9 @@ def main() -> int:
     if not live:
         print("    skipped: no live session right now")
         print(
-            "\n    The candidate app is not currently live on Render.\n"
+            "\n    The candidate app is not currently live on the local network.\n"
             "    Start an interview from a candidate app that is ALSO in\n"
-            "    'Shared Render API' mode, then run this again."
+            "    'Local network API' mode, then run this again."
         )
         return 0
 

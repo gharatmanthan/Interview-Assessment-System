@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from app.core import settings_store
-from app.core.remote_api import RemoteApiClient
+from app.core.lan_api import LanApiClient
 
 try:
     import cv2
@@ -76,13 +76,11 @@ class SettingsPage(QWidget):
         form.addWidget(self._section_label("Devices"))
 
         self.camera_combo = QComboBox()
-        for idx in detect_cameras():
-            self.camera_combo.addItem(f"Camera {idx}", idx)
+        self.camera_combo.addItem("Default camera (index 0)", 0)
         form.addWidget(self._field("Camera", self.camera_combo))
 
         self.mic_combo = QComboBox()
-        for name, idx in detect_mic_devices():
-            self.mic_combo.addItem(name, idx)
+        self.mic_combo.addItem("Default microphone", "default")
         form.addWidget(self._field("Microphone", self.mic_combo))
 
         form.addWidget(self._section_label("Scoring Model"))
@@ -96,18 +94,18 @@ class SettingsPage(QWidget):
         self.api_key_input.setPlaceholderText("Paste your API key")
         form.addWidget(self._field("API Key", self.api_key_input))
 
-        form.addWidget(self._section_label("Shared Backend"))
+        form.addWidget(self._section_label("Local Network"))
 
         self.backend_combo = QComboBox()
         self.backend_combo.addItem("This PC (local SQLite)", "local")
-        self.backend_combo.addItem("Shared Render API", "remote")
+        self.backend_combo.addItem("Local network API", "lan")
         form.addWidget(self._field("Data backend", self.backend_combo))
 
-        self.remote_api_input = QLineEdit()
-        self.remote_api_input.setPlaceholderText(
-            "https://interviewiq-api-736y.onrender.com/api/v1"
+        self.lan_api_input = QLineEdit()
+        self.lan_api_input.setPlaceholderText(
+            "http://192.168.1.100:8000/api/v1"
         )
-        form.addWidget(self._field("Remote API URL", self.remote_api_input))
+        form.addWidget(self._field("API URL on interviewer PC", self.lan_api_input))
 
         form.addWidget(self._section_label("Export"))
 
@@ -171,16 +169,16 @@ class SettingsPage(QWidget):
         backend_idx = self.backend_combo.findData(s.get("backend_mode", "local"))
         if backend_idx >= 0:
             self.backend_combo.setCurrentIndex(backend_idx)
-        self.remote_api_input.setText(s.get("remote_api_url", ""))
+        self.lan_api_input.setText(s.get("lan_api_url", ""))
 
     def _save(self):
-        remote_url = self.remote_api_input.text().strip().rstrip("/")
-        if self.backend_combo.currentData() == "remote" or remote_url:
+        lan_url = self.lan_api_input.text().strip().rstrip("/")
+        if self.backend_combo.currentData() == "lan" or lan_url:
             try:
-                remote_url = RemoteApiClient._normalize_base_url(remote_url)
+                lan_url = LanApiClient._normalize_base_url(lan_url)
             except ValueError as error:
                 QMessageBox.warning(self, "Invalid API URL", str(error))
-                self.remote_api_input.setFocus()
+                self.lan_api_input.setFocus()
                 return
         settings_store.save_settings({
             "camera_index": self.camera_combo.currentData(),
@@ -189,6 +187,6 @@ class SettingsPage(QWidget):
             "llm_api_key": self.api_key_input.text(),
             "export_dir": self.export_dir_input.text(),
             "backend_mode": self.backend_combo.currentData(),
-            "remote_api_url": remote_url,
+            "lan_api_url": lan_url,
         })
         QMessageBox.information(self, "Settings saved", "Your settings have been saved.")

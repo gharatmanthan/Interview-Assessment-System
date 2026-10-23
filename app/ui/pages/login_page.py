@@ -112,8 +112,7 @@ class RoleLoginPage(QWidget):
         if self.role == "interviewer":
             message = (
                 "Interviewer credentials are configured by the organization. "
-                "Set INTERVIEWER_ID and INTERVIEWER_PASSWORD, or use the values "
-                "supplied by the Render deployment owner."
+                "Set INTERVIEWER_ID and INTERVIEWER_PASSWORD on the interviewer PC."
             )
         else:
             message = "That candidate ID and password do not match."
