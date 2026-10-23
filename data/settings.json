@@ -2,7 +2,7 @@
   "camera_index": 0,
   "mic_device": "default",
   "llm_provider": "Groq",
-  "llm_api_key": "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",
+  "llm_api_key": "",
   "export_dir": "C:\\Users\\Manthan_Gharat\\Documents",
   "backend_mode": "local",
   "lan_api_url": ""
